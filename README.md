@@ -101,3 +101,8 @@ Status: written as a starting point, not yet compiled or tested. Expect small fi
   COMP or BOTH side by side; each has its own on/off switch. The compressor starts off.
 - **File menu:** Save Project... and Open Project... write and read a .bstation file (pads, chops, envelopes, sequence, MIDI mappings).
   The stand-alone app also restores your last session by itself. A "save before closing?" prompt needs a custom stand-alone wrapper.
+
+## Phase 5b (small update to phase 5)
+- Right-click a pad: **Load sound...** (next to MIDI Learn).
+- Right-click a sound in the browser: **Load to the selected pad** and **Load to pad...** (pick any of the 16).
+- Nothing else changed from phase 5.

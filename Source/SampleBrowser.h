@@ -9,6 +9,7 @@ class SampleBrowser : public juce::Component, private juce::ListBoxModel, privat
 {
 public:
     std::function<void (const juce::File&)> onLoad;                    // load this file into the selected pad
+    std::function<void (const juce::File&, int pad)> onLoadToPad;      // load this file into a specific pad (right-click menu)
 
     explicit SampleBrowser (BeatStationProcessor& p) : proc (p)
     {
@@ -185,7 +186,14 @@ private:
         const auto entry = entries[row];
         if (e.mods.isPopupMenu())
         {
-            juce::PopupMenu m;
+            juce::PopupMenu m, padMenu;
+            if (! entry.isDir)
+            {
+                m.addItem (4, "Load to the selected pad");
+                for (int i = 0; i < numPads; ++i) padMenu.addItem (200 + i, "Pad " + juce::String (i + 1));
+                m.addSubMenu ("Load to pad...", padMenu);
+                m.addSeparator();
+            }
             m.addItem (1, entry.isDir ? "Add folder to favorites" : "Add sound to favorites");
             if (inSearch && ! entry.isDir) m.addItem (2, "Open its folder here");
             if (! entry.isDir) m.addItem (3, "Show in the system file browser");
@@ -194,6 +202,8 @@ private:
                 if (r == 1) proc.library.addFavorite (entry.file.getFullPathName());
                 else if (r == 2) goTo (entry.file.getParentDirectory());
                 else if (r == 3) entry.file.revealToUser();
+                else if (r == 4) { if (onLoad) onLoad (entry.file); }
+                else if (r >= 200) { if (onLoadToPad) onLoadToPad (entry.file, r - 200); }
             });
         }
         else if (! entry.isDir && e.mods.isShiftDown()) loadRow (row);        // Shift+click loads

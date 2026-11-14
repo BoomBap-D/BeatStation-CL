@@ -41,6 +41,7 @@ BeatStationEditor::BeatStationEditor (BeatStationProcessor& p)
     shape.setLearnCallback ([this] (const juce::String& t) { showLearnMenu (t); });
     fx.setLearnCallback ([this] (const juce::String& t) { showLearnMenu (t); });
     seq.onLoaded = [this] (int pad) { refreshAfterEdit(); selectPad (pad); };
+    browser.onLoadToPad = [this] (const juce::File& f, int pad) { proc.loadSample (pad, f); selectPad (pad); refreshAfterEdit(); };
     fx.onBack = [this] { fxMode = false; updateView(); };
     fxBtn.onClick = [this] { fxMode = ! fxMode; updateView(); };
     fileBtn.onClick = [this] { showFileMenu(); };
@@ -215,12 +216,26 @@ void BeatStationEditor::showLearnMenu (const juce::String& target)
     m.addItem (1, isPad ? "MIDI Learn (hit a pad or key)" : "MIDI Learn");
     if (isPad || mapped.isNotEmpty())
         m.addItem (2, isPad ? "Reset to the default note (now " + mapped + ")" : "Clear MIDI mapping (" + mapped + ")");
+    if (isPad) m.addItem (3, "Load sound...");                         // right-click a pad to load a sound into it
     juce::Component::SafePointer<BeatStationEditor> safe (this);
     m.showMenuAsync (juce::PopupMenu::Options(), [safe, target] (int r)
     {
         if (safe == nullptr) return;
         if (r == 1) safe->proc.startLearn (target);
         else if (r == 2) safe->proc.clearMapping (target);
+        else if (r == 3)
+        {
+            const int pad = target.fromFirstOccurrenceOf (":", false, false).getIntValue();
+            safe->chooser = std::make_unique<juce::FileChooser> ("Choose a sample for pad " + juce::String (pad + 1), juce::File(), "*.wav;*.aif;*.aiff;*.flac;*.mp3;*.ogg");
+            safe->chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                                        [safe, pad] (const juce::FileChooser& fc)
+                                        {
+                                            if (safe == nullptr || ! fc.getResult().existsAsFile()) return;
+                                            safe->proc.loadSample (pad, fc.getResult());
+                                            safe->selectPad (pad);
+                                            safe->refreshAfterEdit();
+                                        });
+        }
         safe->repaint();
     });
 }
