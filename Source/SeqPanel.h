@@ -3,11 +3,23 @@
 #include "Theme.h"
 
 // 4 tracks x 16 steps. Click or drag to paint steps on and off. The cream outline is the playhead.
-class StepGrid : public juce::Component
+class StepGrid : public juce::Component, public juce::DragAndDropTarget
 {
 public:
     explicit StepGrid (BeatStationProcessor& p) : proc (p) {}
-    int page = 0;                                                   // 0 = steps 1-16, 1 = steps 17-32
+    int page = 0;
+    std::function<void (int track, const juce::String& description)> onDropped;
+
+    bool isInterestedInDragSource (const SourceDetails& d) override { const auto s = d.description.toString(); return s.startsWith ("sample:") || s.startsWith ("padcopy:"); }
+    void itemDropped (const SourceDetails& d) override
+    {
+        for (int t = 0; t < BeatStationProcessor::numTracks; ++t)
+            if (cell (t, 0).withWidth ((float) getWidth()).expanded (0.f, 3.f).contains (d.localPosition.toFloat()))
+            {
+                if (onDropped) onDropped (t, d.description.toString());
+                return;
+            }
+    }                                                   // 0 = steps 1-16, 1 = steps 17-32
 
     static juce::Colour trackColour (int t)
     {
@@ -70,10 +82,13 @@ private:
 
 // The name next to a track. It shows your own name if you gave one, otherwise the name of the sound on the pad.
 // Click it to hear the sound (it plays the pad). Right-click to rename.
-class TrackLabel : public juce::Component
+class TrackLabel : public juce::Component, public juce::DragAndDropTarget
 {
 public:
     TrackLabel (BeatStationProcessor& p, int t) : proc (p), track (t) {}
+    std::function<void (const juce::String& description)> onDropped;
+    bool isInterestedInDragSource (const SourceDetails& d) override { const auto s = d.description.toString(); return s.startsWith ("sample:") || s.startsWith ("padcopy:"); }
+    void itemDropped (const SourceDetails& d) override { if (onDropped) onDropped (d.description.toString()); }
 
     void paint (juce::Graphics& g) override
     {
@@ -146,6 +161,7 @@ class SequencerPanel : public juce::Component, private juce::Timer
 {
 public:
     std::function<void (const juce::String& target)> onLearnMenu;   // right-click Play / Stop / REC to MIDI-learn them
+    std::function<void (int pad)> onLoaded;                         // a sound was dropped onto a track (it loads into that track's pad)
 
     explicit SequencerPanel (BeatStationProcessor& p)
         : proc (p), grid (p),
@@ -154,6 +170,7 @@ public:
         for (auto* c : std::initializer_list<juce::Component*> { &playBtn, &stopBtn, &recBtn, &clearBtn, &lenBtn, &pageBtn, &bpm, &swing, &grid })
             addAndMakeVisible (*c);
 
+        grid.onDropped = [this] (int t, const juce::String& d) { handleDrop (t, d); };
         for (auto* s : { &bpm, &swing })
         {
             s->setColour (juce::Slider::trackColourId, Theme::amber.withAlpha (0.35f));
@@ -169,6 +186,7 @@ public:
         for (int t = 0; t < BeatStationProcessor::numTracks; ++t)
         {
             label[t] = std::make_unique<TrackLabel> (p, t);
+            label[t]->onDropped = [this, t] (const juce::String& d) { handleDrop (t, d); };
             addAndMakeVisible (*label[t]);
             padBox[t].addItemList (padNames, 1);
             padBox[t].setColour (juce::ComboBox::backgroundColourId, Theme::graphBg);
@@ -246,6 +264,14 @@ public:
     }
 
 private:
+    void handleDrop (int track, const juce::String& description)
+    {
+        const int pad = (int) proc.apvts.getRawParameterValue (ParamID::trackPad (track))->load();
+        if (description.startsWith ("sample:")) proc.loadSample (pad, juce::File (description.fromFirstOccurrenceOf ("sample:", false, false)));
+        else if (description.startsWith ("padcopy:")) proc.copyPad (description.fromFirstOccurrenceOf (":", false, false).getIntValue(), pad);
+        if (onLoaded) onLoaded (pad);
+    }
+
     void timerCallback() override
     {
         playBtn.setToggleState (proc.playing.load(), juce::dontSendNotification);

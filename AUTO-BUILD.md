@@ -1,24 +1,30 @@
-# Beat Station — Auto-Build (GitHub)
+# Beat Station Phase 5 — Update on GitHub (browser upload)
 
-This package builds itself on GitHub. You never compile anything on your PC.
+Phase 5 goes into the SAME repo as Phase 4: **BoomBap-D/BeatStation-CL**.
+The build workflow is already in that repo and in this package, and it
+starts by itself on every upload. You never compile anything on your PC.
 
-## One-time setup
-1. In GitHub Desktop (signed in as BoomBap-D), create a NEW repository named
-   **BeatStation** (separate from the BoomBap repo). Do not initialize it
-   with a README.
-2. Copy ALL of this package's contents — including the hidden `.github`
-   folder — into the new repo's folder on your PC.
-3. Commit ("Beat Station JUCE 7 first build") and Publish/Push.
+## Update the repo
+1. Unzip this package on your PC and open the folder.
+2. On github.com, open **BoomBap-D/BeatStation-CL** → **Add file** →
+   **Upload files**.
+3. Select ALL of this package's contents (Ctrl+A — including the
+   `.github` folder) and drag them into the upload page. Upload the
+   CONTENTS, not the outer folder itself. Same-name files are replaced;
+   Phase 5's new files are added.
+4. **Commit changes.** The build starts by itself.
 
 ## Getting your Windows build
-1. Open the BeatStation repo on github.com → **Actions** tab.
-2. Wait for the run to finish (~10–20 minutes). Green check on **Windows**
-   is the one that matters.
+1. Repo → **Actions** tab → open the newest run.
+2. Wait for it to finish. Green check on **Windows** is the one that
+   matters (macOS can cancel on GitHub's side — that's not a code
+   failure, it happened on Phase 4's first run too).
 3. Open the run → **Artifacts** → download **BeatStation-Windows**.
 4. Inside: `Beat Station.exe` (standalone — double-click and play) and
    `Beat Station.vst3` (drop the whole folder into
    `C:\Program Files\Common Files\VST3` for your DAW).
 
-Built on **JUCE 7.0.12**, so it runs on your Windows 8.1 PC (and 10/11).
-macOS builds are unsigned — first open is right-click → Open.
+Built on **JUCE 7.0.12** — JUCE 7's Windows deployment target is Vista
+onward, so this covers **Windows 7, 8, 8.1, 10 and 11**, including your
+8.1 PC. (JUCE 8, which Phase 5 arrived on, is Windows 10 only.)
 Notes on what was fixed and ported: see BUILD-NOTES.md.

@@ -6,7 +6,7 @@ Needs CMake 3.22+ and a C++17 compiler.
     cmake -B build -DCMAKE_BUILD_TYPE=Release
     cmake --build build --config Release
 
-JUCE 7.0.12 downloads automatically (ported from 8.0.4 so the Windows build runs on Windows 8.1 — see BUILD-NOTES.md). You get a VST3 instrument (copied to your VST3 folder) and a Standalone app.
+JUCE 8.0.4 downloads automatically. You get a VST3 instrument (copied to your VST3 folder) and a Standalone app.
 
 ## Try it
 1. Run the Standalone app.
@@ -80,3 +80,24 @@ Status: written as a starting point, not yet compiled or tested. Expect small fi
 - **Audio cutouts:** found and fixed one likely cause - filters were being set up while a sound started, which can allocate memory on the
   audio thread. They are now prepared in advance. Build in Release mode (a Debug build is much slower and can crackle).
 - Coming next: mix mode (a small fader and meter on every pad). Per-pad LEVEL and PAN already exist (knobs under EDIT).
+
+## Phase 5 (second feedback round)
+- **Meters:** IN now shows the loaded pad sounds before the envelope and filter; OUT shows the final result after the envelopes, filter,
+  synth and the master EQ/compressor.
+- **MIDI Learn fixed:** controllers are now told apart by channel and number (knobs that share a CC number on different channels no
+  longer overwrite each other). Pad knobs (level, pan, tune, choke) and the SHAPE knobs follow the selected pad, so a learned knob
+  always moves the pad you are looking at. The title bar shows the last MIDI message received, e.g. "last: CC 21 ch1 = 64".
+- **Sample window:** AMP ENV and FILTER ENV switches in the sample window turn each envelope on or off; when on, the curve is drawn over
+  the sample (drag dots, double-click to add or remove). Click the sample to hear it (Shift+click = whole sample). Drag the DRAG TO PAD
+  tab onto another pad or onto a sequencer track to copy the sound and chop there.
+- **Drag and drop:** sounds from the browser and copies from the sample window can be dropped on a pad or on a sequencer track (it loads
+  into that track's pad).
+- **Browser:** shows one folder at a time (double-click a folder to go in), Back / Forward / Up, Favorites (folders or single sounds,
+  saved between runs), and the search box still searches everything you added. Shift+click loads a sound.
+- **Keys:** pick one of 21 built-in instruments from the INSTRUMENT menu above the keyboard (piano, electric piano, organs, pads,
+  strings, brass, leads, plucks, bells, basses, flute, clav...). Choosing one switches Keys on. They are synthesized live and are simple
+  approximations, not recordings. "Selected Pad Sample" plays the pad's sound across the keyboard.
+- **FX window (top bar, FX):** a master EQ and compressor on the final mix, the same processing as the stand-alone EQ/Comp plugin. Show EQ,
+  COMP or BOTH side by side; each has its own on/off switch. The compressor starts off.
+- **File menu:** Save Project... and Open Project... write and read a .bstation file (pads, chops, envelopes, sequence, MIDI mappings).
+  The stand-alone app also restores your last session by itself. A "save before closing?" prompt needs a custom stand-alone wrapper.

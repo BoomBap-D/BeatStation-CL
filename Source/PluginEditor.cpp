@@ -2,10 +2,10 @@
 
 BeatStationEditor::BeatStationEditor (BeatStationProcessor& p)
     : AudioProcessorEditor (&p), proc (p), inMeter (p, 0, "IN"), outMeter (p, 1, "OUT"), pads (p), wave (p), browser (p), seq (p), shape (p),
-      keyboard (p.keyboardState)
+      keyboard (p), fx (p)
 {
     setLookAndFeel (&lnf);
-    for (auto* c : std::initializer_list<juce::Component*> { &inMeter, &outMeter, &pads, &wave, &browser, &seq, &shape, &keyboard,
+    for (auto* c : std::initializer_list<juce::Component*> { &inMeter, &outMeter, &pads, &wave, &browser, &seq, &shape, &keyboard, &fx, &fxBtn, &fileBtn,
                                                               &loadBtn, &clearBtn, &clearChopsBtn, &fullBtn, &modeBtn, &keysBtn,
                                                               &chop4, &chop8, &chop16, &chopHits, &stopBtn, &playTop, &stopTop,
                                                               &editTab, &browseTab, &keysTab, &seqTab, &shapeTab, &kitBox,
@@ -33,9 +33,17 @@ BeatStationEditor::BeatStationEditor (BeatStationProcessor& p)
     pads.onRightClick = [this] (int i) { showLearnMenu ("pad:" + juce::String (i)); };
 
     // MIDI Learn: right-click any knob, pad, or transport button
-    auto knobMenu = [this] (const juce::String& id) { showLearnMenu ("param:" + id); };
-    for (auto* k : { &level, &pan, &tune, &choke }) k->onLearnMenu = knobMenu;
-    shape.setLearnCallback (knobMenu);
+    // the pad knobs follow whichever pad is selected, so a MIDI-learned knob always moves the pad you are looking at
+    level.onLearnMenu = [this] (const juce::String&) { showLearnMenu ("sel:" + juce::String (pLevel)); };
+    pan.onLearnMenu   = [this] (const juce::String&) { showLearnMenu ("sel:" + juce::String (pPan)); };
+    tune.onLearnMenu  = [this] (const juce::String&) { showLearnMenu ("sel:" + juce::String (pTune)); };
+    choke.onLearnMenu = [this] (const juce::String&) { showLearnMenu ("sel:" + juce::String (pGroup)); };
+    shape.setLearnCallback ([this] (const juce::String& t) { showLearnMenu (t); });
+    fx.setLearnCallback ([this] (const juce::String& t) { showLearnMenu (t); });
+    seq.onLoaded = [this] (int pad) { refreshAfterEdit(); selectPad (pad); };
+    fx.onBack = [this] { fxMode = false; updateView(); };
+    fxBtn.onClick = [this] { fxMode = ! fxMode; updateView(); };
+    fileBtn.onClick = [this] { showFileMenu(); };
     seq.onLearnMenu = [this] (const juce::String& target) { showLearnMenu (target); };
     for (auto* b : { &playTop, &stopTop, &stopBtn }) b->addMouseListener (this, false);
 
@@ -98,8 +106,7 @@ BeatStationEditor::BeatStationEditor (BeatStationProcessor& p)
     };
 
     selectPad (0);
-    updateDrawer();
-    updateRightMode();
+    updateView();
     setWantsKeyboardFocus (true);
     setSize (1032, 730);
     startTimerHz (15);
@@ -110,18 +117,67 @@ void BeatStationEditor::updateRightMode()
     const bool edit = rightMode == 0;
     for (auto* c : std::initializer_list<juce::Component*> { &wave, &loadBtn, &clearBtn, &clearChopsBtn, &fullBtn, &modeBtn, &keysBtn,
                                                               &chop4, &chop8, &chop16, &chopHits, &level, &pan, &tune, &choke })
-        c->setVisible (edit);
-    browser.setVisible (! edit);
+        c->setVisible (edit && ! fxMode);
+    browser.setVisible (! edit && ! fxMode);
     editTab.setToggleState (edit, juce::dontSendNotification);
     browseTab.setToggleState (! edit, juce::dontSendNotification);
     repaint();
 }
 
+void BeatStationEditor::updateView()
+{
+    for (auto* c : std::initializer_list<juce::Component*> { &pads, &editTab, &browseTab, &keysTab, &seqTab, &shapeTab }) c->setVisible (! fxMode);
+    fx.setVisible (fxMode);
+    fxBtn.setToggleState (fxMode, juce::dontSendNotification);
+    updateRightMode();
+    updateDrawer();
+    repaint();
+}
+
+void BeatStationEditor::showFileMenu()
+{
+    juce::PopupMenu m;
+    m.addItem (1, "Save Project...");
+    m.addItem (2, "Open Project...");
+    juce::Component::SafePointer<BeatStationEditor> safe (this);
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&fileBtn), [safe] (int r)
+    {
+        if (safe == nullptr || r == 0) return;
+        auto* ed = safe.getComponent();
+        if (r == 1)
+        {
+            ed->chooser = std::make_unique<juce::FileChooser> ("Save project", juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("Untitled.bstation"), "*.bstation");
+            ed->chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles | juce::FileBrowserComponent::warnAboutOverwriting,
+                                      [safe] (const juce::FileChooser& fc)
+                                      {
+                                          if (safe == nullptr || fc.getResult() == juce::File()) return;
+                                          juce::MemoryBlock mb;
+                                          safe->proc.getStateInformation (mb);
+                                          fc.getResult().withFileExtension ("bstation").replaceWithData (mb.getData(), mb.getSize());
+                                      });
+        }
+        else
+        {
+            ed->chooser = std::make_unique<juce::FileChooser> ("Open project", juce::File::getSpecialLocation (juce::File::userDocumentsDirectory), "*.bstation");
+            ed->chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                                      [safe] (const juce::FileChooser& fc)
+                                      {
+                                          if (safe == nullptr || ! fc.getResult().existsAsFile()) return;
+                                          juce::MemoryBlock mb;
+                                          if (! fc.getResult().loadFileAsData (mb)) return;
+                                          safe->proc.setStateInformation (mb.getData(), (int) mb.getSize());
+                                          safe->selectPad (safe->selPad);
+                                          safe->refreshAfterEdit();
+                                      });
+        }
+    });
+}
+
 void BeatStationEditor::updateDrawer()
 {
-    keyboard.setVisible (drawer == 0);
-    seq.setVisible (drawer == 1);
-    shape.setVisible (drawer == 2);
+    keyboard.setVisible (drawer == 0 && ! fxMode);
+    seq.setVisible (drawer == 1 && ! fxMode);
+    shape.setVisible (drawer == 2 && ! fxMode);
     keysTab.setToggleState (drawer == 0, juce::dontSendNotification);
     seqTab.setToggleState (drawer == 1, juce::dontSendNotification);
     shapeTab.setToggleState (drawer == 2, juce::dontSendNotification);
@@ -187,14 +243,13 @@ bool BeatStationEditor::keyPressed (const juce::KeyPress& k)
 void BeatStationEditor::timerCallback()
 {
     const bool learning = proc.getLearnTarget().isNotEmpty();
-    const int version = proc.mapVersion.load();
+    const int version = proc.mapVersion.load(), lm = proc.lastMidi.load();
     const bool playing = proc.playing.load();
-    const juce::String text = juce::String (proc.apvts.getRawParameterValue (ParamID::bpm)->load(), 1) + " BPM";
-    if (learning != wasLearning || version != lastMapVersion || text != bpmText || playTop.getToggleState() != playing)
+    if (learning != wasLearning || version != lastMapVersion || lm != lastMidiSeen || playTop.getToggleState() != playing)
     {
         wasLearning = learning;
         lastMapVersion = version;
-        bpmText = text;
+        lastMidiSeen = lm;
         playTop.setToggleState (playing, juce::dontSendNotification);
         repaint();
     }
@@ -210,11 +265,15 @@ void BeatStationEditor::resized()
     auto title = r.removeFromTop (44);
     titleRect = title;
     stopBtn.setBounds (title.removeFromRight (90).withSizeKeepingCentre (90, 34));
-    title.removeFromRight (8);
-    midiBtn.setBounds (title.removeFromRight (110).withSizeKeepingCentre (110, 30));
-    kitBox.setBounds (titleRect.getX() + 230, titleRect.getY() + 8, 190, 28);
-    playTop.setBounds (titleRect.getX() + 430, titleRect.getY() + 5, 60, 34);
-    stopTop.setBounds (titleRect.getX() + 494, titleRect.getY() + 5, 60, 34);
+    title.removeFromRight (6);
+    fileBtn.setBounds (title.removeFromRight (56).withSizeKeepingCentre (56, 30));
+    title.removeFromRight (4);
+    midiBtn.setBounds (title.removeFromRight (60).withSizeKeepingCentre (60, 30));
+    kitBox.setBounds (titleRect.getX() + 210, titleRect.getY() + 8, 170, 28);
+    playTop.setBounds (titleRect.getX() + 388, titleRect.getY() + 5, 56, 34);
+    stopTop.setBounds (titleRect.getX() + 448, titleRect.getY() + 5, 56, 34);
+    fxBtn.setBounds (titleRect.getX() + 512, titleRect.getY() + 5, 56, 34);
+    fx.setBounds (r);                                                   // the master EQ/compressor window covers everything under the title
     bannerRect = { getWidth() / 2 - 300, 4, 600, 32 };
 
     auto main = r.removeFromTop (380);
@@ -271,19 +330,19 @@ void BeatStationEditor::paint (juce::Graphics& g)
     g.setFont (juce::Font (16.f, juce::Font::bold));
     g.drawText ("BEAT STATION", titleRect.getX(), titleRect.getY() + 16, 220, 22, juce::Justification::centredLeft);
 
-    g.setColour (Theme::text);
-    g.setFont (juce::Font (13.f, juce::Font::bold));
-    g.drawText (bpmText, titleRect.getX() + 560, titleRect.getY() + 8, 90, 28, juce::Justification::centredLeft);
-
-    if (isStandalone())
     {
         g.setColour (Theme::dim);
-        g.setFont (12.f);
-        g.drawFittedText ("MIDI in: " + (proc.midiNames.isEmpty() ? juce::String ("none found") : proc.midiNames.joinIntoString (", ")),
-                          titleRect.getX() + 650, titleRect.getY() + 8, titleRect.getWidth() - 650 - 210, 28, juce::Justification::centredRight, 1);
+        g.setFont (11.f);
+        const int lm = proc.lastMidi.load();
+        juce::String last = "none yet";
+        if (lm != 0) last = ((lm >> 24) == 1 ? "CC " : "Note ") + juce::String ((lm >> 8) & 255) + " ch" + juce::String ((lm >> 16) & 255) + " = " + juce::String (lm & 255);
+        const juce::String devices = isStandalone() ? (proc.midiNames.isEmpty() ? juce::String ("MIDI: none found") : "MIDI: " + proc.midiNames.joinIntoString (", "))
+                                                    : juce::String ("MIDI from the host");
+        g.drawFittedText (devices, titleRect.getX() + 576, titleRect.getY() + 4, 104, 16, juce::Justification::centredLeft, 1);
+        g.drawFittedText ("last: " + last, titleRect.getX() + 576, titleRect.getY() + 22, 104, 16, juce::Justification::centredLeft, 1);
     }
 
-    if (rightMode == 0)
+    if (rightMode == 0 && ! fxMode)
     {
         g.setColour (Theme::panel);
         g.fillRoundedRectangle (knobPanel.toFloat(), 8.f);

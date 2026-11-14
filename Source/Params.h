@@ -1,10 +1,12 @@
 #pragma once
 #include <juce_audio_processors/juce_audio_processors.h>
+#include "SynthPatches.h"
+#include "MasterFx.h"
 
 constexpr int numPads = 16;      // phase 1: one bank. Banks B, C, D... come next.
 constexpr int firstNote = 36;    // default MIDI note of pad 1 (the usual MPC layout, 36-51); each pad can be MIDI-learned to another note
 
-enum PadParam { pLevel, pPan, pTune, pMode, pGroup, pRel, pFType, pFCut, pFRes, pFAmt, numPadParams };
+enum PadParam { pLevel, pPan, pTune, pMode, pGroup, pRel, pFType, pFCut, pFRes, pFAmt, pAmpOn, pFltOn, numPadParams };
 
 namespace ParamID
 {
@@ -18,7 +20,9 @@ namespace ParamID
     inline juce::String fCut  (int p) { return "p" + juce::String (p + 1) + "_fc"; }
     inline juce::String fRes  (int p) { return "p" + juce::String (p + 1) + "_fq"; }
     inline juce::String fAmt  (int p) { return "p" + juce::String (p + 1) + "_fe"; }      // how many octaves the filter envelope moves the cutoff
-    inline const juce::String keysMode = "keys_mode";
+    inline juce::String ampOn (int p) { return "p" + juce::String (p + 1) + "_ao"; }      // amplitude envelope on/off
+    inline juce::String fltOn (int p) { return "p" + juce::String (p + 1) + "_fo"; }      // filter envelope on/off
+    inline const juce::String keysMode = "keys_mode", keysInst = "keys_inst";
     inline const juce::String bpm = "bpm", swing = "swing", seqLen = "seq_len";
     inline juce::String trackPad  (int t) { return "t" + juce::String (t + 1) + "_pad"; }
     inline juce::String trackMute (int t) { return "t" + juce::String (t + 1) + "_mute"; }
@@ -46,9 +50,12 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
         l.add (std::make_unique<AudioParameterFloat> (ParameterID { ParamID::fCut (p), 1 }, n + " Cutoff",    NormalisableRange<float> (20.f, 20000.f, 0.1f, 0.25f), 20000.f));
         l.add (std::make_unique<AudioParameterFloat> (ParameterID { ParamID::fRes (p), 1 }, n + " Resonance", NormalisableRange<float> (0.5f, 12.f, 0.01f, 0.5f), 0.7f));
         l.add (std::make_unique<AudioParameterFloat> (ParameterID { ParamID::fAmt (p), 1 }, n + " Filter Env Amount", NormalisableRange<float> (-6.f, 6.f, 0.01f), 0.f));
+        l.add (std::make_unique<AudioParameterBool> (ParameterID { ParamID::ampOn (p), 1 }, n + " Amp Envelope On", true));
+        l.add (std::make_unique<AudioParameterBool> (ParameterID { ParamID::fltOn (p), 1 }, n + " Filter Envelope On", false));
     }
     // Keys mode: MIDI notes play the selected pad's sample pitched across the keyboard (C3 = original pitch).
     l.add (std::make_unique<AudioParameterBool> (ParameterID { ParamID::keysMode, 1 }, "Keys Mode", false));
+    l.add (std::make_unique<AudioParameterChoice> (ParameterID { ParamID::keysInst, 1 }, "Keys Instrument", keysInstrumentNames(), 1));
 
     // Step sequencer: tempo, swing, pattern length, and which pad each of the 4 tracks plays
     l.add (std::make_unique<AudioParameterFloat> (ParameterID { ParamID::bpm, 1 },   "BPM",   NormalisableRange<float> (40.f, 220.f, 0.1f), 92.f));
@@ -62,5 +69,6 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
         l.add (std::make_unique<AudioParameterChoice> (ParameterID { ParamID::trackPad (t), 1 },  "Track " + String (t + 1) + " Pad", padNames, defaultPad[t]));
         l.add (std::make_unique<AudioParameterBool>   (ParameterID { ParamID::trackMute (t), 1 }, "Track " + String (t + 1) + " Mute", false));
     }
+    MasterFx::addParameters (l);                                       // the master EQ and compressor
     return l;
 }

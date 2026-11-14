@@ -10,8 +10,7 @@ static juce::dsp::StateVariableTPTFilterType typeFor (int ft)
 }
 
 BeatStationProcessor::BeatStationProcessor()
-    : AudioProcessor (BusesProperties().withInput ("Input", juce::AudioChannelSet::stereo(), false)     // optional: the standalone app enables it
-                                       .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
+    : AudioProcessor (BusesProperties().withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
       apvts (*this, nullptr, "STATE", createLayout())
 {
     formats.registerBasicFormats();
@@ -22,10 +21,17 @@ BeatStationProcessor::BeatStationProcessor()
         raw[p][pMode] = gp (ParamID::mode (p));     raw[p][pGroup] = gp (ParamID::group (p)); raw[p][pRel] = gp (ParamID::rel (p));
         raw[p][pFType] = gp (ParamID::fType (p));   raw[p][pFCut] = gp (ParamID::fCut (p));   raw[p][pFRes] = gp (ParamID::fRes (p));
         raw[p][pFAmt] = gp (ParamID::fAmt (p));
+        raw[p][pAmpOn] = gp (ParamID::ampOn (p));   raw[p][pFltOn] = gp (ParamID::fltOn (p));
+        auto gq = [this] (const juce::String& id) { return apvts.getParameter (id); };         // the parameters themselves, for MIDI learn
+        padParams[p][pLevel] = gq (ParamID::level (p));   padParams[p][pPan] = gq (ParamID::pan (p));     padParams[p][pTune] = gq (ParamID::tune (p));
+        padParams[p][pMode] = gq (ParamID::mode (p));     padParams[p][pGroup] = gq (ParamID::group (p)); padParams[p][pRel] = gq (ParamID::rel (p));
+        padParams[p][pFType] = gq (ParamID::fType (p));   padParams[p][pFCut] = gq (ParamID::fCut (p));   padParams[p][pFRes] = gq (ParamID::fRes (p));
+        padParams[p][pFAmt] = gq (ParamID::fAmt (p));     padParams[p][pAmpOn] = gq (ParamID::ampOn (p)); padParams[p][pFltOn] = gq (ParamID::fltOn (p));
         padNote[(size_t) p] = firstNote + p;
         slots[(size_t) p].fltEnv.p[1] = { 400.f, 0.f };                                       // filter envelope starts as a falling curve
     }
     pKeys = apvts.getRawParameterValue (ParamID::keysMode);
+    pKeysInst = apvts.getRawParameterValue (ParamID::keysInst);
     pBpm = apvts.getRawParameterValue (ParamID::bpm);
     pSwing = apvts.getRawParameterValue (ParamID::swing);
     pLen = apvts.getRawParameterValue (ParamID::seqLen);
@@ -292,11 +298,21 @@ void BeatStationProcessor::renderPreview (juce::AudioBuffer<float>& buffer)
 }
 
 // ---------------------------------------------------------------- MIDI learn
+void BeatStationProcessor::copyPad (int from, int to)
+{
+    if (from == to) return;
+    const auto src = getPad (from);
+    if (src.sample == nullptr) return;
+    assign (to, src.sample, src.file, src.start, src.end);
+    setEnv (to, 0, getEnv (from, 0));
+    setEnv (to, 1, getEnv (from, 1));
+}
+
 juce::String BeatStationProcessor::describeMapping (const juce::String& target) const
 {
     const juce::SpinLock::ScopedLockType l (mapLock);
     if (target.startsWith ("pad:")) return "Note " + juce::String (padNote[(size_t) target.fromFirstOccurrenceOf (":", false, false).getIntValue()]);
-    for (const auto& m : maps) if (m.target == target) return (m.isCC ? "CC " : "Note ") + juce::String (m.number);
+    for (const auto& m : maps) if (m.target == target) return (m.isCC ? "CC " : "Note ") + juce::String (m.number) + " ch " + juce::String (m.channel);
     return {};
 }
 
@@ -315,7 +331,7 @@ void BeatStationProcessor::clearMapping (const juce::String& target)
     ++mapVersion;
 }
 
-void BeatStationProcessor::applyLearn (bool isCC, int number)
+void BeatStationProcessor::applyLearn (bool isCC, int channel, int number)
 {
     // called with mapLock held
     const juce::String target = learnTarget;
@@ -329,14 +345,17 @@ void BeatStationProcessor::applyLearn (bool isCC, int number)
     }
     else
     {
-        if (target.startsWith ("param:") && ! isCC) return;           // knobs learn from controllers only
+        if ((target.startsWith ("param:") || target.startsWith ("sel:")) && ! isCC) return;     // knobs learn from controllers only
+        // a controller is identified by its channel AND number, so knobs that share a number on different channels stay separate
         maps.erase (std::remove_if (maps.begin(), maps.end(),
-                                    [&] (const MidiMap& m) { return m.target == target || (m.isCC == isCC && m.number == number); }), maps.end());
+                                    [&] (const MidiMap& m) { return m.target == target || (m.isCC == isCC && m.channel == channel && m.number == number); }), maps.end());
         MidiMap m;
         m.isCC = isCC;
+        m.channel = channel;
         m.number = number;
         m.target = target;
         if (target.startsWith ("param:")) m.param = apvts.getParameter (target.fromFirstOccurrenceOf (":", false, false));
+        if (target.startsWith ("sel:")) m.padParamIdx = target.fromFirstOccurrenceOf (":", false, false).getIntValue();   // follows whichever pad is selected
         maps.push_back (m);
     }
     learnTarget = {};
@@ -349,21 +368,26 @@ bool BeatStationProcessor::handleMapping (const juce::MidiMessage& msg)
     if (! isCC && ! isNote) return false;
     const juce::SpinLock::ScopedTryLockType l (mapLock);
     if (! l.isLocked()) return false;
-    const int number = isCC ? msg.getControllerNumber() : msg.getNoteNumber();
+    const int number = isCC ? msg.getControllerNumber() : msg.getNoteNumber(), channel = msg.getChannel();
     if (isCC && number >= 120) return false;                          // "all notes off" and friends are not mappable
 
     if (learnTarget.isNotEmpty())
     {
-        const bool waiting = learnTarget.startsWith ("pad:") ? ! isNote : (learnTarget.startsWith ("param:") ? ! isCC : false);
+        const bool waiting = learnTarget.startsWith ("pad:") ? ! isNote : ((learnTarget.startsWith ("param:") || learnTarget.startsWith ("sel:")) ? ! isCC : false);
         if (waiting) return false;                                    // wrong kind of message for this target
-        applyLearn (isCC, number);
+        applyLearn (isCC, channel, number);
         return true;
     }
 
     for (const auto& m : maps)
-        if (m.isCC == isCC && m.number == number)
+        if (m.isCC == isCC && m.channel == channel && m.number == number)
         {
-            if (m.param != nullptr) { if (isCC) m.param->setValueNotifyingHost ((float) msg.getControllerValue() / 127.f); }
+            const float value = isCC ? (float) msg.getControllerValue() / 127.f : 1.f;
+            if (m.param != nullptr) { if (isCC) m.param->setValueNotifyingHost (value); }
+            else if (m.padParamIdx >= 0)
+            {
+                if (isCC) if (auto* pp = padParams[selectedPad.load()][m.padParamIdx]) pp->setValueNotifyingHost (value);
+            }
             else if (! isCC || msg.getControllerValue() >= 64)        // actions fire on a note-on or when a button sends a high value
             {
                 if (m.target == "act:play")         { if (playing.load()) stopPlaying(); else startPlaying(); }
@@ -421,14 +445,15 @@ void BeatStationProcessor::startVoice (int pad, float velocity, int note, bool k
     v->relSamples = (double) P (pRel) * 0.001 * sampleRate;
     v->gainL = gain * std::cos (angle) * 1.4142f;                     // equal-power pan, unity at centre
     v->gainR = gain * std::sin (angle) * 1.4142f;
-    v->ampEnv = ae;
+    v->ampEnv = P (pAmpOn) > 0.5f ? ae : EnvData();                   // an envelope that is switched off is just flat
     v->fltEnv = fe;
+    v->fltEnvOn = P (pFltOn) > 0.5f;
     v->fType = -1;                                                    // forces the filter to be set up on the first control tick
     v->filtOn = false;
     v->filt.reset();
 }
 
-void BeatStationProcessor::render (juce::AudioBuffer<float>& buffer, int from, int to)
+void BeatStationProcessor::renderSampler (juce::AudioBuffer<float>& buffer, int from, int to)
 {
     if (to <= from) return;
     float* L = buffer.getWritePointer (0);
@@ -460,11 +485,12 @@ void BeatStationProcessor::render (juce::AudioBuffer<float>& buffer, int from, i
             const float fr = (float) (v.pos - (double) idx);
             float l = d0[idx] + (d0[idx + 1] - d0[idx]) * fr;
             float r = d1[idx] + (d1[idx + 1] - d1[idx]) * fr;
+            if (inL != nullptr) { inL[i] += l * v.gainL; inR[i] += r * v.gainR; }     // IN meter: the sound before the envelope and filter
 
             if ((v.age & 15) == 0)                                    // every 16 samples: read the filter knobs live, so turning them is heard at once
             {
                 const int ft = (int) raw[v.pad][pFType]->load();
-                const float cut = juce::jlimit (20.f, maxCut, raw[v.pad][pFCut]->load() * std::pow (2.f, raw[v.pad][pFAmt]->load() * v.fltEnv.at (tMs)));
+                const float cut = juce::jlimit (20.f, maxCut, raw[v.pad][pFCut]->load() * std::pow (2.f, raw[v.pad][pFAmt]->load() * (v.fltEnvOn ? v.fltEnv.at (tMs) : 0.f)));
                 if (ft != v.fType) { v.fType = ft; v.filt.setType (typeFor (ft)); }
                 v.filt.setCutoffFrequency (cut);
                 v.filt.setResonance (raw[v.pad][pFRes]->load());
@@ -493,6 +519,125 @@ void BeatStationProcessor::render (juce::AudioBuffer<float>& buffer, int from, i
     }
 }
 
+static float polyBlep (float t, float dt)
+{
+    if (t < dt) { t /= dt; return t + t - t * t - 1.f; }
+    if (t > 1.f - dt) { t = (t - 1.f) / dt; return t * t + t + t + 1.f; }
+    return 0.f;
+}
+
+static float oscSample (int wave, float ph, float dt)
+{
+    switch (wave)
+    {
+        case 0:  return std::sin (juce::MathConstants<float>::twoPi * ph);
+        case 1:  return 1.f - 4.f * std::abs (ph - 0.5f);
+        case 2:  return 2.f * ph - 1.f - polyBlep (ph, dt);
+        case 3:  { float v = ph < 0.5f ? 1.f : -1.f; v += polyBlep (ph, dt); float p2 = ph + 0.5f;  if (p2 >= 1.f) p2 -= 1.f; return v - polyBlep (p2, dt); }
+        default: { float v = ph < 0.25f ? 1.f : -1.f; v += polyBlep (ph, dt); float p2 = ph + 0.75f; if (p2 >= 1.f) p2 -= 1.f; return v - polyBlep (p2, dt); }
+    }
+}
+
+void BeatStationProcessor::startSynth (int note, float velocity, int patchIndex)
+{
+    const auto& patches = synthPatches();
+    if (! juce::isPositiveAndBelow (patchIndex, (int) patches.size())) return;
+    SynthVoice* v = nullptr;
+    for (auto& c : synth) if (! c.active) { v = &c; break; }
+    if (v == nullptr) { v = &synth[0]; for (auto& c : synth) if (c.age > v->age) v = &c; }
+    const SynthPatch& p = patches[(size_t) patchIndex];
+    v->active = true;  v->stopping = false;  v->stopGain = 1.f;  v->note = note;  v->age = 0;  v->vel = velocity;  v->patch = &p;
+    v->freq = 440.f * std::pow (2.f, ((float) note - 69.f) / 12.f);
+    v->phA = v->phB = v->phS = v->phM = v->phV = 0.f;
+    v->env.setParameters ({ p.attMs * 0.001f, p.decMs * 0.001f, p.sus, p.relMs * 0.001f });
+    v->env.noteOn();
+    v->filt.reset();
+    v->filt.setType (juce::dsp::StateVariableTPTFilterType::lowpass);
+    v->filt.setResonance (p.res);
+    v->filt.setCutoffFrequency (p.cutoff);
+}
+
+void BeatStationProcessor::renderSynth (juce::AudioBuffer<float>& buffer, int from, int to)
+{
+    if (to <= from) return;
+    float* L = buffer.getWritePointer (0);
+    float* R = buffer.getNumChannels() > 1 ? buffer.getWritePointer (1) : nullptr;
+    const float sr = (float) sampleRate, maxCut = sr * 0.45f, twoPi = juce::MathConstants<float>::twoPi;
+    static const float harm[6] = { 1.f, 2.f, 3.f, 4.f, 6.f, 8.f };
+
+    for (auto& v : synth)
+    {
+        if (! v.active) continue;
+        const SynthPatch& p = *v.patch;
+        const bool additive = (p.drawbars[0] + p.drawbars[1] + p.drawbars[2] + p.drawbars[3] + p.drawbars[4] + p.drawbars[5]) > 0.f;
+        const float detRatio = std::exp2 (p.detuneCents / 1200.f), octRatio = std::exp2 (p.octB / 12.f);
+
+        for (int i = from; i < to; ++i)
+        {
+            const float tMs = (float) v.age * 1000.f / sr;
+            float f = v.freq;
+            if (p.pitchDrop != 0.f) f *= std::exp2 (p.pitchDrop * std::exp (-tMs / juce::jmax (1.f, p.pitchDropMs)) / 12.f);
+            if (p.vibCents > 0.f)
+            {
+                v.phV += p.vibRate / sr;  if (v.phV >= 1.f) v.phV -= 1.f;
+                f *= std::exp2 (std::sin (twoPi * v.phV) * p.vibCents / 1200.f);
+            }
+            const float dtA = f / sr;
+
+            float mix;
+            if (additive)
+            {
+                mix = 0.f;
+                for (int k = 0; k < 6; ++k) mix += p.drawbars[k] * std::sin (twoPi * harm[k] * v.phA);
+                mix *= 0.35f;
+            }
+            else if (p.fmIndex > 0.f && p.waveA == 0)
+            {
+                const float idx = p.fmIndex * std::exp (-tMs / juce::jmax (1.f, p.fmDecayMs));
+                mix = std::sin (twoPi * v.phA + idx * std::sin (twoPi * v.phM));
+                v.phM += dtA * p.fmRatio;  if (v.phM >= 1.f) v.phM -= 1.f;
+            }
+            else mix = oscSample (p.waveA, v.phA, dtA);
+            v.phA += dtA;  if (v.phA >= 1.f) v.phA -= 1.f;
+
+            if (p.levelB > 0.f)
+            {
+                const float dtB = dtA * detRatio * octRatio;
+                mix += p.levelB * oscSample (p.waveB, v.phB, dtB);
+                v.phB += dtB;  if (v.phB >= 1.f) v.phB -= 1.f;
+            }
+            if (p.sub > 0.f) { mix += p.sub * std::sin (twoPi * v.phS); v.phS += dtA * 0.5f;  if (v.phS >= 1.f) v.phS -= 1.f; }
+            if (p.noise > 0.f) mix += p.noise * (noiseRng.nextFloat() * 2.f - 1.f);
+
+            const float aenv = v.env.getNextSample();
+            if (! v.env.isActive()) { v.active = false; break; }
+
+            if ((v.age & 15) == 0)                                    // filter cutoff: base, key tracking, and a falling envelope
+            {
+                const float fe = std::exp (-tMs / juce::jmax (1.f, p.fltDecMs));
+                v.filt.setCutoffFrequency (juce::jlimit (30.f, maxCut, p.cutoff * std::pow (v.freq / 261.63f, p.keyTrack) * std::exp2 (p.fltAmt * fe)));
+            }
+            float g = v.vel * p.gain;
+            if (v.stopping)
+            {
+                v.stopGain *= stopCoef;
+                if (v.stopGain < 0.001f) { v.active = false; break; }
+                g *= v.stopGain;
+            }
+            const float out = v.filt.processSample (0, mix * aenv) * g;
+            L[i] += out;
+            if (R != nullptr) R[i] += out;
+            ++v.age;
+        }
+    }
+}
+
+void BeatStationProcessor::render (juce::AudioBuffer<float>& buffer, int from, int to)
+{
+    renderSampler (buffer, from, to);
+    renderSynth (buffer, from, to);
+}
+
 void BeatStationProcessor::recordHit (int pad, double stepPosition)
 {
     const int len = getPatternLength();
@@ -507,14 +652,9 @@ void BeatStationProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
     const int n = buffer.getNumSamples();
 
     auto raise = [] (std::atomic<float>& a, float v) { float c = a.load(); while (v > c && ! a.compare_exchange_weak (c, v)) {} };
-    const int inCh = getTotalNumInputChannels();
-    if (inCh > 0)                                                     // input meter (the audio input is not played back yet)
-    {
-        const float l = buffer.getMagnitude (0, 0, n), r = inCh > 1 ? buffer.getMagnitude (1, 0, n) : l;
-        raise (peak[0][0], l);  raise (peak[0][1], r);
-        if (juce::jmax (l, r) >= 0.999f) clipped[0] = true;
-    }
     buffer.clear();
+    inL = inR = nullptr;                                              // the IN meter collects the pad sounds before envelope and filter
+    if (inBus.getNumSamples() >= n) { inBus.clear (0, n); inL = inBus.getWritePointer (0); inR = inBus.getWritePointer (1); }
 
     midiCollector.removeNextBlockOfMessages (midi, n);                // hardware MIDI keyboards (standalone)
     keyboardState.processNextMidiBuffer (midi, 0, n, true);           // pads and keys clicked on screen
@@ -522,6 +662,7 @@ void BeatStationProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
     if (stopAll.exchange (false))
     {
         for (auto& v : voices) if (v.active) stopVoice (v);
+        for (auto& sv : synth) if (sv.active) sv.stopping = true;
         preview.active = false;
     }
     if (previewStop.exchange (false)) preview.active = false;
@@ -581,6 +722,7 @@ void BeatStationProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
 
     // ---- MIDI and sequencer events
     const bool keysMode = pKeys->load() > 0.5f;
+    const int inst = (int) pKeysInst->load();                         // 0 = the selected pad's sample, 1+ = a synthesized instrument
     int pos = 0;
     for (const auto meta : midi)
     {
@@ -591,8 +733,11 @@ void BeatStationProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
         if (msg.isAllNotesOff() || msg.isAllSoundOff())
         {
             for (auto& v : voices) if (v.active) stopVoice (v);
+            for (auto& sv : synth) if (sv.active) sv.stopping = true;
             continue;
         }
+        if (msg.isController()) lastMidi = (1 << 24) | (msg.getChannel() << 16) | (msg.getControllerNumber() << 8) | msg.getControllerValue();
+        else if (msg.isNoteOn() && msg.getChannel() != 16) lastMidi = (2 << 24) | (msg.getChannel() << 16) | (msg.getNoteNumber() << 8) | (int) msg.getVelocity();
         if (handleMapping (msg)) continue;                            // MIDI Learn: assigned controls, or the message that was just learned
 
         const int note = msg.getNoteNumber(), ch = msg.getChannel();
@@ -603,7 +748,9 @@ void BeatStationProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
 
         if (msg.isNoteOn())
         {
-            if (keysTrigger)
+            if (keysTrigger && inst > 0)
+                startSynth (note, msg.getFloatVelocity(), inst - 1);
+            else if (keysTrigger)
                 startVoice (selectedPad.load(), msg.getFloatVelocity(), note, true, (float) (note - 60), false);
             else if (pad >= 0)
             {
@@ -614,12 +761,21 @@ void BeatStationProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
         }
         else if (msg.isNoteOff())
         {
+            if (keysTrigger && inst > 0) releaseSynth (note);
             for (auto& v : voices)                                    // Gate mode pads fade out when the key is let go
                 if (v.active && v.gate && ! v.stopping && v.note == note && v.keys == keysTrigger) releaseVoice (v);
         }
     }
     render (buffer, pos, n);
     renderPreview (buffer);
+    if (inL != nullptr)
+    {
+        const float l = inBus.getMagnitude (0, 0, n), r = inBus.getMagnitude (1, 0, n);
+        raise (peak[0][0], l);  raise (peak[0][1], r);
+        if (juce::jmax (l, r) >= 0.999f) clipped[0] = true;
+    }
+
+    masterFx.process (buffer);                                        // master EQ and compressor, then the OUT meter
 
     const float oL = buffer.getMagnitude (0, 0, n), oR = buffer.getNumChannels() > 1 ? buffer.getMagnitude (1, 0, n) : oL;
     raise (peak[1][0], oL);  raise (peak[1][1], oR);
@@ -702,6 +858,7 @@ void BeatStationProcessor::getStateInformation (juce::MemoryBlock& dest)
         {
             juce::ValueTree e ("MAP");
             e.setProperty ("cc", m.isCC, nullptr);
+            e.setProperty ("ch", m.channel, nullptr);
             e.setProperty ("num", m.number, nullptr);
             e.setProperty ("target", m.target, nullptr);
             midiTree.appendChild (e, nullptr);
@@ -768,9 +925,11 @@ void BeatStationProcessor::setStateInformation (const void* data, int size)
         {
             MidiMap m;
             m.isCC = (bool) e["cc"];
+            m.channel = e.hasProperty ("ch") ? (int) e["ch"] : 1;
             m.number = e["num"];
             m.target = e["target"].toString();
             if (m.target.startsWith ("param:")) m.param = apvts.getParameter (m.target.fromFirstOccurrenceOf (":", false, false));
+            if (m.target.startsWith ("sel:")) m.padParamIdx = m.target.fromFirstOccurrenceOf (":", false, false).getIntValue();
             maps.push_back (m);
         }
     }

@@ -14,12 +14,19 @@ public:
         folders.removeEmptyStrings();
         files = juce::StringArray::fromLines (dir().getChildFile ("index.txt").loadFileAsString());
         files.removeEmptyStrings();
+        favorites = juce::StringArray::fromLines (dir().getChildFile ("favorites.txt").loadFileAsString());
+        favorites.removeEmptyStrings();
     }
 
     ~SampleLibrary() override { stopThread (5000); }
 
     juce::StringArray getFolders() const { const juce::ScopedLock sl (lock); return folders; }
     int size() const { const juce::ScopedLock sl (lock); return files.size(); }
+
+    // Favorites: folders or single sounds you want to jump back to. Saved between runs.
+    juce::StringArray getFavorites() const { const juce::ScopedLock sl (lock); return favorites; }
+    void addFavorite (const juce::String& path) { { const juce::ScopedLock sl (lock); favorites.addIfNotAlreadyThere (path); } saveFavorites(); }
+    void removeFavorite (const juce::String& path) { { const juce::ScopedLock sl (lock); favorites.removeString (path); } saveFavorites(); }
     bool isScanning() const { return isThreadRunning(); }
 
     void addFolder (const juce::File& f)
@@ -58,6 +65,7 @@ private:
         return juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory).getChildFile ("Basement Instruments").getChildFile ("Beat Station");
     }
 
+    void saveFavorites() { juce::StringArray f; { const juce::ScopedLock sl (lock); f = favorites; } dir().getChildFile ("favorites.txt").replaceWithText (f.joinIntoString ("\n")); }
     void saveFolders() { juce::StringArray f; { const juce::ScopedLock sl (lock); f = folders; } dir().getChildFile ("folders.txt").replaceWithText (f.joinIntoString ("\n")); }
 
     void run() override
@@ -78,5 +86,5 @@ private:
     }
 
     mutable juce::CriticalSection lock;
-    juce::StringArray folders, files;
+    juce::StringArray folders, files, favorites;
 };

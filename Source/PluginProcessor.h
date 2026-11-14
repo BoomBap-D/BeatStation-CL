@@ -58,13 +58,12 @@ public:
             v.filt.prepare ({ sr, (juce::uint32) juce::jmax (1, blockSize), 2u });   // done here once so nothing allocates while playing
         }
         preview.active = false;
+        for (auto& s : synth) { s.active = false; s.filt.prepare ({ sr, (juce::uint32) juce::jmax (1, blockSize), 1u }); s.env.setSampleRate (sr); }
+        inBus.setSize (2, juce::jmax (blockSize * 2, 8192));
+        masterFx.prepare (sr, blockSize);
     }
     void releaseResources() override {}
-    bool isBusesLayoutSupported (const BusesLayout& l) const override
-    {
-        const auto in = l.getMainInputChannelSet();
-        return l.getMainOutputChannelSet() == juce::AudioChannelSet::stereo() && (in == juce::AudioChannelSet::disabled() || in == juce::AudioChannelSet::stereo());
-    }
+    bool isBusesLayoutSupported (const BusesLayout& l) const override { return l.getMainOutputChannelSet() == juce::AudioChannelSet::stereo(); }
     void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
 
     juce::AudioProcessorEditor* createEditor() override;
@@ -129,6 +128,8 @@ public:
     juce::String describeMapping (const juce::String& target) const;      // "CC 21", "Note 40" or ""
     void clearMapping (const juce::String& target);
     std::atomic<int> mapVersion { 0 };                  // bumps whenever a mapping changes
+    std::atomic<int> lastMidi { 0 };                    // the last CC or note received, packed: type<<24 | channel<<16 | number<<8 | value
+    void copyPad (int from, int to);                    // gives another pad the same sound and chop
 
     // ---- Meters: [0] = input, [1] = output; each side has left/right peaks that the GUI reads and resets ----
     std::atomic<float> peak[2][2] {};
@@ -139,6 +140,7 @@ public:
     std::atomic<uint32_t> activePads { 0 };             // bit i set = pad i is sounding
     juce::MidiKeyboardState keyboardState;              // the GUI plays pads and keys through this
     juce::AudioProcessorValueTreeState apvts;
+    MasterFx masterFx { apvts };                        // EQ then compressor on the final mix
 
 private:
     struct Slot
@@ -157,12 +159,21 @@ private:
         double pos = 0, end = 0, ratio = 1, fadeOutLen = 1, relSamples = 0;
         float gainL = 1.f, gainR = 1.f, relGain = 1.f, relStep = 0.f;
         int note = -1, group = 0, fType = -1;
-        bool keys = false, gate = false, stopping = false, releasing = false, autoRelease = true, filtOn = false;
+        bool keys = false, gate = false, stopping = false, releasing = false, autoRelease = true, filtOn = false, fltEnvOn = true;
         float stopGain = 1.f;
         EnvData ampEnv, fltEnv;
         juce::dsp::StateVariableTPTFilter<float> filt;
     };
-    struct MidiMap { bool isCC = true; int number = 0; juce::String target; juce::RangedAudioParameter* param = nullptr; };
+    struct SynthVoice
+    {
+        bool active = false, stopping = false;
+        int note = 0, age = 0;
+        float vel = 0.f, stopGain = 1.f, freq = 440.f, phA = 0.f, phB = 0.f, phS = 0.f, phM = 0.f, phV = 0.f;
+        const SynthPatch* patch = nullptr;
+        juce::ADSR env;
+        juce::dsp::StateVariableTPTFilter<float> filt;
+    };
+    struct MidiMap { bool isCC = true; int channel = 1, number = 0; juce::String target; juce::RangedAudioParameter* param = nullptr; int padParamIdx = -1; };
 
     void assign (int pad, std::shared_ptr<const Sample> s, const juce::String& file, float start, float end);
     void startVoice (int pad, float velocity, int note, bool keys, float extraSemis, bool noGate, bool whole = false);
@@ -170,8 +181,12 @@ private:
     void releaseVoice (Voice& v) { if (! v.releasing) { v.releasing = true; v.relStep = 1.f / (float) juce::jmax (1.0, v.relSamples); } }
     void render (juce::AudioBuffer<float>&, int from, int to);
     void renderPreview (juce::AudioBuffer<float>&);
+    void renderSampler (juce::AudioBuffer<float>&, int from, int to);
+    void renderSynth (juce::AudioBuffer<float>&, int from, int to);
+    void startSynth (int note, float velocity, int patchIndex);
+    void releaseSynth (int note) { for (auto& s : synth) if (s.active && ! s.stopping && s.note == note) s.env.noteOff(); }
     bool handleMapping (const juce::MidiMessage& msg);
-    void applyLearn (bool isCC, int number);
+    void applyLearn (bool isCC, int channel, int number);
     void recordHit (int pad, double stepPosition);
     bool decodeInto (int pad, std::unique_ptr<juce::AudioFormatReader> reader, const juce::String& name, const juce::String& fileKey);
     bool loadBuiltin (int pad, const juce::String& resourceName);
@@ -181,8 +196,13 @@ private:
     juce::AudioFormatManager formats;
     std::array<Slot, numPads> slots;
     std::array<Voice, 32> voices;
+    std::array<SynthVoice, 12> synth;
+    juce::Random noiseRng;
+    juce::AudioBuffer<float> inBus;                      // the pad sounds before the envelope and filter: what the IN meter shows
+    float *inL = nullptr, *inR = nullptr;
+    juce::RangedAudioParameter* padParams[numPads][numPadParams] {};
     std::atomic<float>* raw[numPads][numPadParams] {};   // indexed by PadParam
-    std::atomic<float>* pKeys = nullptr;
+    std::atomic<float> *pKeys = nullptr, *pKeysInst = nullptr;
     std::atomic<float> *pBpm = nullptr, *pSwing = nullptr, *pLen = nullptr, *pTrackPad[numTracks] {}, *pTrackMute[numTracks] {};
     std::array<std::atomic<bool>, numTracks * maxSteps> steps;
     std::array<juce::String, numTracks> trackName;

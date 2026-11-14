@@ -26,7 +26,14 @@ public:
         for (auto* k : { &cutoff, &res, &amount, &fade }) addAndMakeVisible (*k);
     }
 
-    void setLearnCallback (std::function<void (const juce::String&)> cb) { for (auto* k : { &cutoff, &res, &amount, &fade }) k->onLearnMenu = cb; }
+    // these knobs follow whichever pad is selected, so a MIDI-learned knob always moves the pad you are looking at
+    void setLearnCallback (std::function<void (const juce::String& target)> cb)
+    {
+        cutoff.onLearnMenu = [cb] (const juce::String&) { cb ("sel:" + juce::String (pFCut)); };
+        res.onLearnMenu    = [cb] (const juce::String&) { cb ("sel:" + juce::String (pFRes)); };
+        amount.onLearnMenu = [cb] (const juce::String&) { cb ("sel:" + juce::String (pFAmt)); };
+        fade.onLearnMenu   = [cb] (const juce::String&) { cb ("sel:" + juce::String (pRel)); };
+    }
 
     void setPad (int p)
     {

@@ -81,12 +81,14 @@ public:
         finishLoad (start);
     }
 
-    bool isInterestedInDragSource (const SourceDetails& d) override { return d.description.toString().startsWith ("sample:"); }
+    bool isInterestedInDragSource (const SourceDetails& d) override { const auto s = d.description.toString(); return s.startsWith ("sample:") || s.startsWith ("padcopy:"); }
     void itemDropped (const SourceDetails& d) override
     {
         const int pad = hit (d.localPosition.toFloat());
         if (pad < 0) return;
-        proc.loadSample (pad, juce::File (d.description.toString().fromFirstOccurrenceOf ("sample:", false, false)));
+        const auto s = d.description.toString();
+        if (s.startsWith ("sample:")) proc.loadSample (pad, juce::File (s.fromFirstOccurrenceOf ("sample:", false, false)));        // from the browser
+        else if (s.startsWith ("padcopy:")) proc.copyPad (s.fromFirstOccurrenceOf (":", false, false).getIntValue(), pad);          // from the sample window
         finishLoad (pad);
     }
 
