@@ -49,8 +49,12 @@ public:
         attachment.reset();
         paramId = id;
         attachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (apvts, id, slider);
+        // a knob whose range is the same either side of zero (pan, tune, gain) lights outwards from the centre
+        slider.getProperties().set ("bipolar", slider.getMinimum() < 0.0 && std::abs (slider.getMinimum() + slider.getMaximum()) < 1.0e-6);
         refresh();
     }
+
+    void setAccent (juce::Colour c) { slider.setColour (juce::Slider::rotarySliderFillColourId, c); slider.repaint(); }   // the colour of the lit ticks
 
     void resized() override
     {

@@ -83,7 +83,9 @@ public:
 
     double getSR() const { return sampleRate; }
 
-    void process (juce::AudioBuffer<float>& buffer)
+    void process (juce::AudioBuffer<float>& buffer) { processEq (buffer); processComp (buffer); }
+
+    void processEq (juce::AudioBuffer<float>& buffer)
     {
         const int numCh = buffer.getNumChannels(), n = buffer.getNumSamples();
 
@@ -109,7 +111,11 @@ public:
             juce::dsp::ProcessContextReplacing<float> ctx (block);
             for (auto& f : eq) f.process (ctx);
         }
+    }
 
+    void processComp (juce::AudioBuffer<float>& buffer)
+    {
+        const int numCh = buffer.getNumChannels(), n = buffer.getNumSamples();
         if (pCompOn->load() < 0.5f)                                   // compressor bypass
         {
             inDb.store (juce::Decibels::gainToDecibels (buffer.getMagnitude (0, n), -100.f));

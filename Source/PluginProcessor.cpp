@@ -37,7 +37,11 @@ BeatStationProcessor::BeatStationProcessor()
     pBpm = apvts.getRawParameterValue (ParamID::bpm);
     pSwing = apvts.getRawParameterValue (ParamID::swing);
     pLen = apvts.getRawParameterValue (ParamID::seqLen);
-    for (int t = 0; t < numTracks; ++t)
+    for (auto& s : steps) s = false;
+    for (auto& s : trackSrc) s = 0;
+    for (auto& m : trackMuted) m = false;
+    for (int src : { 0, 2, 4, 8 }) addTrack (src);                    // kick, snare, closed hat, 808
+    for (int t = 0; t < legacyTracks; ++t)
     {
         pTrackPad[t] = apvts.getRawParameterValue (ParamID::trackPad (t));
         pTrackMute[t] = apvts.getRawParameterValue (ParamID::trackMute (t));
@@ -160,6 +164,41 @@ int BeatStationProcessor::loadKit (const juce::String& key)
 }
 
 void BeatStationProcessor::clearPattern() { for (auto& s : steps) s.store (false); }
+
+int BeatStationProcessor::findTrack (int src) const
+{
+    const int n = numTracks.load();
+    for (int t = 0; t < n; ++t) if (trackSrc[(size_t) t].load() == src) return t;
+    return -1;
+}
+
+int BeatStationProcessor::addTrack (int src)          // only atomics are touched, so recording can call this from the audio side
+{
+    const int t = numTracks.load();
+    if (t >= maxTracks) return -1;
+    for (int s = 0; s < maxSteps; ++s) steps[(size_t) (t * maxSteps + s)] = false;
+    trackSrc[(size_t) t] = src;
+    trackMuted[(size_t) t] = false;
+    numTracks = t + 1;
+    ++tracksVersion;
+    return t;
+}
+
+void BeatStationProcessor::removeTrack (int t)
+{
+    const int n = numTracks.load();
+    if (t < 0 || t >= n) return;
+    numTracks = n - 1;                                                // shrink first so the last row is never played half-moved
+    for (int k = t; k < n - 1; ++k)
+    {
+        for (int s = 0; s < maxSteps; ++s) steps[(size_t) (k * maxSteps + s)] = steps[(size_t) ((k + 1) * maxSteps + s)].load();
+        trackSrc[(size_t) k] = trackSrc[(size_t) (k + 1)].load();
+        trackMuted[(size_t) k] = trackMuted[(size_t) (k + 1)].load();
+        trackName[(size_t) k] = trackName[(size_t) (k + 1)];
+    }
+    trackName[(size_t) (n - 1)] = {};
+    ++tracksVersion;
+}
 void BeatStationProcessor::clearPad (int pad) { assign (pad, nullptr, {}, 0.f, 1.f); }
 
 void BeatStationProcessor::clearChops (int pad)
@@ -796,12 +835,14 @@ void BeatStationProcessor::renderDeck (juce::AudioBuffer<float>& buffer, int n)
     deckPos = dPos;
 }
 
-void BeatStationProcessor::recordHit (int pad, double stepPosition)
+// REC: the hit lands on the nearest step of the track that plays this pad or key. If there is no such track yet, one is made.
+void BeatStationProcessor::recordHit (int src, double stepPosition)
 {
     const int len = getPatternLength();
-    const int idx = (((int) std::floor (stepPosition + 0.5)) % len + len) % len;   // nearest step
-    for (int t = 0; t < numTracks; ++t)
-        if ((int) pTrackPad[t]->load() == pad) setStep (t, idx, true);
+    const int idx = (((int) std::floor (stepPosition + 0.5)) % len + len) % len;
+    int t = findTrack (src);
+    if (t < 0) t = addTrack (src);
+    if (t >= 0) setStep (t, idx, true);
 }
 
 void BeatStationProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
@@ -863,7 +904,14 @@ void BeatStationProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
 
     // ---- Step sequencer: turns lit steps into note-ons (MIDI channel 16) at the right sample offsets.
     // Inside a DAW it follows the host transport and tempo; otherwise it runs from the Play button.
+    for (auto& po : seqOffs)                                          // note-offs left over from key tracks
+        if (po.note >= 0)
+        {
+            if (po.samples < n) { midi.addEvent (juce::MidiMessage::noteOff (15, po.note), juce::jmax (0, po.samples)); po.note = -1; }
+            else po.samples -= n;
+        }
     double bpm = pBpm->load(), hostStep = 0.0;
+    juce::int64 hostSample = -1;
     bool hostPlaying = false;
     if (auto* ph = getPlayHead())
         if (auto pos = ph->getPosition())
@@ -871,6 +919,7 @@ void BeatStationProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
             {
                 hostPlaying = true;
                 hostStep = pos->getPpqPosition().orFallback (0.0) * 4.0;
+                hostSample = pos->getTimeInSamples().orFallback (-1);
                 if (auto hb = pos->getBpm()) bpm = *hb;
             }
     const bool running = hostPlaying || playing.load();
@@ -891,9 +940,21 @@ void BeatStationProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
             const int off = juce::jlimit (0, n - 1, (int) ((t - blockStart) / sps));
             const int idx = ((k % len) + len) % len;
             currentStep.store (idx);
-            for (int tr = 0; tr < numTracks; ++tr)
-                if (steps[(size_t) (tr * maxSteps + idx)].load() && pTrackMute[tr]->load() < 0.5f)
-                    midi.addEvent (juce::MidiMessage::noteOn (16, padNote[(size_t) (int) pTrackPad[tr]->load()], (juce::uint8) 100), off);
+            const int nTracks = numTracks.load(), gate = juce::jmax (1, (int) (0.9 / sps));
+            for (int tr = 0; tr < nTracks; ++tr)
+            {
+                if (! steps[(size_t) (tr * maxSteps + idx)].load() || trackMuted[(size_t) tr].load()) continue;
+                const int src = trackSrc[(size_t) tr].load();
+                if (src < keySrc)                                     // a pad track: channel 16
+                    midi.addEvent (juce::MidiMessage::noteOn (16, padNote[(size_t) juce::jlimit (0, numPads - 1, src)], (juce::uint8) 100), off);
+                else                                                  // a key track: channel 15, with a note-off one step later
+                {
+                    const int kn = juce::jlimit (0, 127, src - keySrc), due = off + gate;
+                    midi.addEvent (juce::MidiMessage::noteOn (15, kn, (juce::uint8) 100), off);
+                    if (due < n) midi.addEvent (juce::MidiMessage::noteOff (15, kn), due);
+                    else for (auto& po : seqOffs) if (po.note < 0) { po.note = kn; po.samples = due; break; }
+                }
+            }
         }
         stepPos = s1;
         if (! hostPlaying && stepPos >= 1024.0) stepPos -= 1024.0;
@@ -917,10 +978,20 @@ void BeatStationProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
             continue;
         }
         if (msg.isController()) lastMidi = (1 << 24) | (msg.getChannel() << 16) | (msg.getControllerNumber() << 8) | msg.getControllerValue();
-        else if (msg.isNoteOn() && msg.getChannel() != 16) lastMidi = (2 << 24) | (msg.getChannel() << 16) | (msg.getNoteNumber() << 8) | (int) msg.getVelocity();
+        else if (msg.isNoteOn() && msg.getChannel() < 15) lastMidi = (2 << 24) | (msg.getChannel() << 16) | (msg.getNoteNumber() << 8) | (int) msg.getVelocity();
         if (handleMapping (msg)) continue;                            // MIDI Learn: assigned controls, or the message that was just learned
 
         const int note = msg.getNoteNumber(), ch = msg.getChannel();
+        if (ch == 15 && (msg.isNoteOn() || msg.isNoteOff()))          // a key track of the sequencer (or a click on its name)
+        {
+            if (msg.isNoteOn())
+            {
+                if (inst > 0) startSynth (note, msg.getFloatVelocity(), inst - 1);
+                else startVoice (selectedPad.load(), msg.getFloatVelocity(), note, true, (float) (note - 60), true);
+            }
+            else if (inst > 0) releaseSynth (note);
+            continue;
+        }
         const bool seqNote = (ch == 16);
         const bool keysOn = keysMode && ch != 10 && ! seqNote;        // channel 10 and the sequencer always play the pads
         const bool keysAsDrums = keysOn && keysDrums.load();          // DRUM SET: every key plays a pad (16 pads repeat up the keyboard)
@@ -932,12 +1003,18 @@ void BeatStationProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
 
         if (msg.isNoteOn())
         {
-            if (keysTrigger && inst > 0)
-                startSynth (note, msg.getFloatVelocity(), inst - 1);
-            else if (keysTrigger)
-                startVoice (selectedPad.load(), msg.getFloatVelocity(), note, true, (float) (note - 60), false);
+            const bool recNow = ! seqNote && running && recording.load();
+            if (keysTrigger)                                          // the keyboard: REC writes each key onto its own track
+            {
+                if (inst > 0) startSynth (note, msg.getFloatVelocity(), inst - 1);
+                else startVoice (selectedPad.load(), msg.getFloatVelocity(), note, true, (float) (note - 60), false);
+                if (recNow) recordHit (keySrc + note, blockStart + (double) meta.samplePosition * sps);
+            }
             else if (padAsInst)
+            {
                 startSynth (48 + pad, msg.getFloatVelocity(), juce::jmax (0, inst - 1));
+                if (recNow) recordHit (pad, blockStart + (double) meta.samplePosition * sps);
+            }
             else if (pad >= 0)
             {
                 startVoice (pad, msg.getFloatVelocity(), note, false, 0.f, seqNote);
@@ -956,6 +1033,21 @@ void BeatStationProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
     render (buffer, pos, n);
     renderPreview (buffer);
     renderDeck (buffer, n);
+
+    // ---- the audio tracks and the vocal booth (they join the mix here, before the master effects)
+    const bool micForTracks = haveMic && (int) micMono.size() >= n;
+    if (micForTracks)
+    {
+        const float* ml = micBus.getReadPointer (0);
+        const float* mr = micBus.getReadPointer (1);
+        for (int i = 0; i < n; ++i) micMono[(size_t) i] = 0.5f * (ml[i] + mr[i]);
+    }
+    if (tracks.process (buffer, micForTracks ? micMono.data() : nullptr, n, running, hostSample, booth, bpm)
+        && inL != nullptr && ! recArmed.load())                       // an armed track shows the input on the IN meter
+    {
+        inBus.addFrom (0, 0, micBus, 0, 0, n);
+        inBus.addFrom (1, 0, micBus, 1, 0, n);
+    }
     if (inL != nullptr)
     {
         const float l = inBus.getMagnitude (0, 0, n), r = inBus.getMagnitude (1, 0, n);
@@ -963,7 +1055,7 @@ void BeatStationProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
         if (juce::jmax (l, r) >= 0.999f) clipped[0] = true;
     }
 
-    masterFx.process (buffer);                                        // master EQ and compressor, then the OUT meter
+    fxChain.process (buffer, bpm);                                    // the effects chain, then the OUT meter
 
     const float oL = buffer.getMagnitude (0, 0, n), oR = buffer.getNumChannels() > 1 ? buffer.getMagnitude (1, 0, n) : oL;
     raise (peak[1][0], oL);  raise (peak[1][1], oR);
@@ -1002,7 +1094,7 @@ static EnvData envFromString (const juce::String& str, const EnvData& fallback)
 void BeatStationProcessor::getStateInformation (juce::MemoryBlock& dest)
 {
     auto state = apvts.copyState();
-    for (const char* name : { "PADS", "SEQ", "ENVS", "MIDIMAP", "NAMES" }) state.removeChild (state.getChildWithName (name), nullptr);
+    for (const char* name : { "PADS", "SEQ", "ENVS", "MIDIMAP", "NAMES", "AUDIOTRACKS" }) state.removeChild (state.getChildWithName (name), nullptr);
 
     juce::ValueTree pads ("PADS"), envs ("ENVS");
     for (int i = 0; i < numPads; ++i)
@@ -1031,15 +1123,35 @@ void BeatStationProcessor::getStateInformation (juce::MemoryBlock& dest)
     state.setProperty ("keysDrums", keysDrums.load(), nullptr);
     state.setProperty ("padsInst", padsInst.load(), nullptr);
 
-    juce::String bits;
-    for (auto& s : steps) bits += s.load() ? "1" : "0";
+    state.setProperty ("uiScale", uiScale.load(), nullptr);
+    state.setProperty ("fxOrder", fxChain.orderString(), nullptr);
+    state.setProperty ("boothOrder", booth.orderString(), nullptr);
+    juce::ValueTree at ("AUDIOTRACKS");
+    for (int t = 0; t < AudioTracks::num; ++t)
+    {
+        const auto& tr = tracks.tracks[(size_t) t];
+        juce::ValueTree n ("ATRACK");
+        n.setProperty ("name", tr.name, nullptr);     n.setProperty ("file", tr.file, nullptr);
+        n.setProperty ("start", (double) tr.start.load(), nullptr);
+        n.setProperty ("vol", tr.vol.load(), nullptr); n.setProperty ("pan", tr.pan.load(), nullptr);
+        n.setProperty ("mute", tr.mute.load(), nullptr); n.setProperty ("booth", tr.booth.load(), nullptr); n.setProperty ("burned", tr.burned.load(), nullptr);
+        at.appendChild (n, nullptr);
+    }
+    state.appendChild (at, nullptr);
     juce::ValueTree seq ("SEQ");
-    seq.setProperty ("steps", bits, nullptr);
+    seq.setProperty ("bars", seqBars.load(), nullptr);
+    for (int t = 0; t < numTracks.load(); ++t)
+    {
+        juce::String bits;
+        for (int s = 0; s < maxSteps; ++s) bits += getStep (t, s) ? "1" : "0";
+        juce::ValueTree tr ("TRACK");
+        tr.setProperty ("src", trackSrc[(size_t) t].load(), nullptr);
+        tr.setProperty ("mute", trackMuted[(size_t) t].load(), nullptr);
+        tr.setProperty ("name", trackName[(size_t) t], nullptr);
+        tr.setProperty ("steps", bits, nullptr);
+        seq.appendChild (tr, nullptr);
+    }
     state.appendChild (seq, nullptr);
-
-    juce::ValueTree names ("NAMES");
-    for (int t = 0; t < numTracks; ++t) names.setProperty ("t" + juce::String (t), trackName[(size_t) t], nullptr);
-    state.appendChild (names, nullptr);
 
     juce::ValueTree midiTree ("MIDIMAP");
     {
@@ -1100,15 +1212,54 @@ void BeatStationProcessor::setStateInformation (const void* data, int size)
         setEnv (i, 1, envFromString (e["flt"].toString(), getEnv (i, 1)));
     }
 
+    uiScale = (float) apvts.state.getProperty ("uiScale", 1.0f);
+    fxChain.setOrderFromString (apvts.state.getProperty ("fxOrder", "").toString());
+    booth.setOrderFromString (apvts.state.getProperty ("boothOrder", "").toString());
+    const auto at = apvts.state.getChildWithName ("AUDIOTRACKS");
+    for (int t = 0; t < AudioTracks::num && t < at.getNumChildren(); ++t)
+    {
+        const auto n = at.getChild (t);
+        auto& tr = tracks.tracks[(size_t) t];
+        tr.name = n["name"].toString();
+        tr.vol = (float) n.getProperty ("vol", 0.8f);   tr.pan = (float) n.getProperty ("pan", 0.0f);
+        tr.mute = (bool) n["mute"];                     tr.booth = (bool) n.getProperty ("booth", t < 4);
+        tracks.clearClip (t);
+        const juce::File f (n["file"].toString());
+        if (f.existsAsFile()) tracks.loadClipFile (t, f, (juce::int64) (double) n["start"], (bool) n["burned"], formats);
+    }
     const auto seq = apvts.state.getChildWithName ("SEQ");
     if (seq.isValid())
     {
-        const juce::String bits = seq["steps"].toString();
-        for (int i = 0; i < (int) steps.size() && i < bits.length(); ++i) steps[(size_t) i].store (bits[i] == '1');
+        numTracks = 0;
+        for (auto& n : trackName) n = {};
+        if (seq.getNumChildren() > 0)                                 // current format: one TRACK per row
+        {
+            seqBars = juce::jlimit (1, 8, (int) seq.getProperty ("bars", 1));
+            for (auto tr : seq)
+            {
+                const int t = addTrack ((int) tr["src"]);
+                if (t < 0) break;
+                trackMuted[(size_t) t] = (bool) tr["mute"];
+                trackName[(size_t) t] = tr["name"].toString();
+                const juce::String bits = tr["steps"].toString();
+                for (int s = 0; s < maxSteps && s < bits.length(); ++s) setStep (t, s, bits[s] == '1');
+            }
+        }
+        else                                                          // projects saved before phase 8: 4 tracks x 32 steps
+        {
+            const juce::String bits = seq["steps"].toString();
+            const auto names = apvts.state.getChildWithName ("NAMES");
+            seqBars = pLen->load() < 0.5f ? 1 : 2;
+            for (int k = 0; k < legacyTracks; ++k)
+            {
+                const int t = addTrack ((int) pTrackPad[k]->load());
+                trackMuted[(size_t) t] = pTrackMute[k]->load() > 0.5f;
+                trackName[(size_t) t] = names.getProperty ("t" + juce::String (k)).toString();
+                for (int s = 0; s < 32 && k * 32 + s < bits.length(); ++s) setStep (t, s, bits[k * 32 + s] == '1');
+            }
+        }
+        ++tracksVersion;
     }
-
-    const auto names = apvts.state.getChildWithName ("NAMES");
-    for (int t = 0; t < numTracks; ++t) trackName[(size_t) t] = names.getProperty ("t" + juce::String (t)).toString();
 
     const auto midiTree = apvts.state.getChildWithName ("MIDIMAP");
     if (midiTree.isValid())

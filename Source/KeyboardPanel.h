@@ -46,6 +46,21 @@ public:
             sync();
         };
         addAndMakeVisible (srcBtn);
+        // REC TO STEPS: records what you play here into the step sequencer. It switches Keys on and starts the beat if it is stopped.
+        recBtn.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffd0221f));
+        recBtn.onClick = [this]
+        {
+            const bool on = ! proc.recording.load();
+            proc.recording = on;
+            if (on)
+            {
+                if (auto* prm = proc.apvts.getParameter (ParamID::keysMode)) prm->setValueNotifyingHost (1.f);
+                if (! proc.playing.load()) proc.startPlaying();
+            }
+            shownRec = -1;
+            sync();
+        };
+        addAndMakeVisible (recBtn);
         addChildComponent (kitBox);
         sync();
 
@@ -85,6 +100,8 @@ public:
         instBox.setBounds (box);
         kitBox.setBounds (box);
         keysOn.setBounds (top.removeFromLeft (90));
+        top.removeFromLeft (8);
+        recBtn.setBounds (top.removeFromLeft (120));
         r.removeFromTop (4);
         auto bottom = r.removeFromBottom (26);
         left.setBounds (bottom.removeFromLeft (40));
@@ -100,6 +117,7 @@ public:
     void sync()                                                         // also called by the editor's timer, so a loaded project shows correctly
     {
         const bool drums = proc.keysDrums.load();
+        if ((int) proc.recording.load() != shownRec) { shownRec = (int) proc.recording.load(); recBtn.setToggleState (shownRec == 1, juce::dontSendNotification); }
         if ((int) drums == shownDrums) return;
         shownDrums = (int) drums;
         srcBtn.setButtonText (drums ? "DRUM SET" : "INSTRUMENT");
@@ -112,7 +130,8 @@ private:
     juce::ComboBox instBox, kitBox;
     juce::StringArray kitKeys;
     juce::TextButton keysOn { "Keys ON" }, srcBtn { "INSTRUMENT" };
-    int shownDrums = -1;
+    int shownDrums = -1, shownRec = -1;
+    juce::TextButton recBtn { "REC TO STEPS" };
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> instAtt;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> keysOnAtt;
     juce::MidiKeyboardComponent keys;

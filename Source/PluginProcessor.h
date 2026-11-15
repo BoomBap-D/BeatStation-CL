@@ -66,6 +66,11 @@ public:
         recBuf.setSize (2, (int) (sr * 60.0) + 16);                    // room for 60 s of recording, made here so nothing allocates while recording
         recLen = 0;
         masterFx.prepare (sr, blockSize);
+        roomFx.prepare (sr);
+        fxChain.prepare (sr, blockSize);
+        booth.prepare (sr);
+        tracks.prepare (sr);
+        micMono.assign ((size_t) juce::jmax (blockSize * 2, 8192), 0.f);
     }
     void releaseResources() override {}
     bool isBusesLayoutSupported (const BusesLayout& l) const override
@@ -137,12 +142,24 @@ public:
     int loadKit (const juce::String& key);              // fills all 16 pads, returns how many loaded
 
     // ---- Step sequencer ----
-    static constexpr int numTracks = 4, maxSteps = 32;
+    // Up to 64 tracks, up to 8 bars (128 steps). A track plays a pad (source 0-15) or one key of the Keys instrument (source 100 + MIDI note).
+    static constexpr int maxTracks = 64, maxSteps = 128, legacyTracks = 4, keySrc = 100;
     bool getStep (int t, int s) const { return steps[(size_t) (t * maxSteps + s)].load(); }
     void setStep (int t, int s, bool on) { steps[(size_t) (t * maxSteps + s)].store (on); }
-    int getPatternLength() const { return pLen->load() < 0.5f ? 16 : 32; }
+    int getBars() const { return seqBars.load(); }
+    void setBars (int bars) { seqBars = juce::jlimit (1, 8, bars); }
+    int getPatternLength() const { return seqBars.load() * 16; }
     void clearPattern();
-    void startPlaying() { resetPos = true; playing = true; }
+    int getNumTracks() const { return numTracks.load(); }
+    int getTrackSrc (int t) const { return trackSrc[(size_t) t].load(); }
+    void setTrackSrc (int t, int src) { trackSrc[(size_t) t] = src; }
+    bool getTrackMute (int t) const { return trackMuted[(size_t) t].load(); }
+    void setTrackMute (int t, bool m) { trackMuted[(size_t) t] = m; }
+    int addTrack (int src);                             // returns the new track's index, or -1 when all 64 are used
+    void removeTrack (int t);
+    int findTrack (int src) const;
+    std::atomic<int> tracksVersion { 0 };               // bumps when tracks are added or removed (also by recording)
+    void startPlaying() { resetPos = true; tracks.restart = true; playing = true; }
     void stopPlaying() { playing = false; }
     juce::String getTrackName (int t) const { return trackName[(size_t) t]; }     // empty = use the pad's sound name
     void setTrackName (int t, const juce::String& n) { trackName[(size_t) t] = n.trim(); }
@@ -167,12 +184,19 @@ public:
     std::atomic<float> peak[2][2] {};
     std::atomic<bool> clipped[2] {};
 
+    std::atomic<float> uiScale { 1.f };                 // window size, saved with the project
     std::atomic<bool> stopAll { false };                // the STOP button
     std::atomic<int> selectedPad { 0 };                 // the pad that Keys mode plays
     std::atomic<uint32_t> activePads { 0 };             // bit i set = pad i is sounding
     juce::MidiKeyboardState keyboardState;              // the GUI plays pads and keys through this
     juce::AudioProcessorValueTreeState apvts;
     MasterFx masterFx { apvts };                        // EQ then compressor on the final mix
+    RoomFx roomFx { apvts };                            // the room reverb
+    BoothChain booth { apvts };                         // the vocal booth: mic character and the vocal chain
+    AudioTracks tracks;                                 // the eight audio tracks
+    juce::AudioFormatManager& getFormats() { return formats; }
+    double getSR() const { return sampleRate > 0.0 ? sampleRate : 44100.0; }
+    FxChain fxChain { apvts, masterFx, roomFx };        // all eleven effects, in the order you set, on the way to the output
 
 private:
     struct Slot
@@ -221,7 +245,7 @@ private:
     void releaseSynth (int note) { for (auto& s : synth) if (s.active && ! s.stopping && s.note == note) s.env.noteOff(); }
     bool handleMapping (const juce::MidiMessage& msg);
     void applyLearn (bool isCC, int channel, int number);
-    void recordHit (int pad, double stepPosition);
+    void recordHit (int src, double stepPosition);
     bool decodeInto (int pad, std::unique_ptr<juce::AudioFormatReader> reader, const juce::String& name, const juce::String& fileKey, float trim, bool internal);
     bool loadBuiltin (int pad, const juce::String& resourceName);
     void handleIncomingMidiMessage (juce::MidiInput*, const juce::MidiMessage& m) override { midiCollector.addMessageToQueue (m); }
@@ -234,13 +258,19 @@ private:
     juce::Random noiseRng;
     juce::AudioBuffer<float> inBus;                      // the pad sounds before the envelope and filter: what the IN meter shows
     float *inL = nullptr, *inR = nullptr;
+    std::vector<float> micMono;                          // the audio input as one channel, for the audio tracks
     juce::AudioBuffer<float> micBus, recBuf;             // the audio input for this block, and the recording
     juce::RangedAudioParameter* padParams[numPads][numPadParams] {};
     std::atomic<float>* raw[numPads][numPadParams] {};   // indexed by PadParam
     std::atomic<float> *pKeys = nullptr, *pKeysInst = nullptr;
-    std::atomic<float> *pBpm = nullptr, *pSwing = nullptr, *pLen = nullptr, *pTrackPad[numTracks] {}, *pTrackMute[numTracks] {};
-    std::array<std::atomic<bool>, numTracks * maxSteps> steps;
-    std::array<juce::String, numTracks> trackName;
+    std::atomic<float> *pBpm = nullptr, *pSwing = nullptr, *pLen = nullptr, *pTrackPad[legacyTracks] {}, *pTrackMute[legacyTracks] {};
+    std::array<std::atomic<bool>, maxTracks * maxSteps> steps;
+    std::array<std::atomic<int>, maxTracks> trackSrc;
+    std::array<std::atomic<bool>, maxTracks> trackMuted;
+    std::atomic<int> numTracks { 0 }, seqBars { 1 };
+    std::array<juce::String, maxTracks> trackName;
+    struct PendingOff { int note = -1, samples = 0; };
+    std::array<PendingOff, 32> seqOffs;                  // note-offs for key tracks, one step after each hit
     double stepPos = 0.0;
     float stopCoef = 0.9985f;
     std::atomic<int> wholePad { -1 };

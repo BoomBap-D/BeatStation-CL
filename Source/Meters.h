@@ -34,9 +34,22 @@ public:
         g.drawText (name, 0, 6, getWidth(), 16, juce::Justification::centred);
 
         const bool clip = proc.clipped[side].load();
-        clipRect = juce::Rectangle<int> ((getWidth() - 32) / 2, 26, 32, 14);
-        g.setColour (clip ? Theme::red : juce::Colour (0xff3a2430));
-        g.fillRoundedRectangle (clipRect.toFloat(), 3.f);
+        clipRect = juce::Rectangle<int> ((getWidth() - 36) / 2, 25, 36, 17);
+        const auto cr = clipRect.toFloat();
+        if (clip)                                                      // glossy red, stays on until you click it
+        {
+            g.setGradientFill (juce::ColourGradient (juce::Colour (0xffff5a4d), cr.getCentreX(), cr.getY(), juce::Colour (0xffa30f14), cr.getCentreX(), cr.getBottom(), false));
+            g.fillRoundedRectangle (cr, 4.f);
+            g.setColour (juce::Colours::white.withAlpha (0.38f));
+            g.fillRoundedRectangle (cr.reduced (2.f, 1.5f).withHeight (cr.getHeight() * 0.4f), 3.f);
+            g.setColour (juce::Colour (0xffff9a90));
+            g.drawRoundedRectangle (cr.reduced (0.5f), 4.f, 1.f);
+        }
+        else
+        {
+            g.setColour (juce::Colour (0xff3a2430));
+            g.fillRoundedRectangle (cr, 4.f);
+        }
         g.setColour (clip ? juce::Colours::white : Theme::dim);
         g.setFont (juce::Font (9.f, juce::Font::bold));
         g.drawText ("CLIP", clipRect, juce::Justification::centred);

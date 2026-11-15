@@ -1,7 +1,8 @@
 #pragma once
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "SynthPatches.h"
-#include "MasterFx.h"
+#include "FxChain.h"
+#include "Booth.h"
 
 constexpr int numPads = 16;      // phase 1: one bank. Banks B, C, D... come next.
 constexpr int firstNote = 36;    // default MIDI note of pad 1 (the usual MPC layout, 36-51); each pad can be MIDI-learned to another note
@@ -70,5 +71,8 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
         l.add (std::make_unique<AudioParameterBool>   (ParameterID { ParamID::trackMute (t), 1 }, "Track " + String (t + 1) + " Mute", false));
     }
     MasterFx::addParameters (l);                                       // the master EQ and compressor
+    RoomFx::addParameters (l);                                         // the room reverb
+    FxChain::addParameters (l);                                        // the rest of the effects suite
+    BoothChain::addParameters (l);                                     // the vocal booth
     return l;
 }

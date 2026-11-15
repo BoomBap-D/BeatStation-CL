@@ -7,6 +7,7 @@
 #include "SeqPanel.h"
 #include "ShapePanel.h"
 #include "FxPanel.h"
+#include "BoothPanel.h"
 #include "KeyboardPanel.h"
 #include "Meters.h"
 #include "SampleBrowser.h"
@@ -45,19 +46,24 @@ private:
     ShapePanel shape;
     KeyboardPanel keyboard;
     FxPanel fx;
+    BoothPanel boothPanel;
+    TrackList trackList;
+    bool boothOpen = false;
     TurntablePanel turntable;
 
     juce::TextButton loadBtn { "Load..." }, clearBtn { "Clear Pad" }, clearChopsBtn { "Clear Chops" }, fullBtn { "Play Full" },
                      modeBtn { "Mode: Cut" }, keysBtn { "Keys" },
                      chop4 { "Chop 4" }, chop8 { "Chop 8" }, chop16 { "Chop 16" }, chopHits { "Chop at hits" },
                      stopBtn { "STOP" }, midiBtn { "MIDI" }, fxBtn { "FX" }, padsModeBtn { "PADS" }, padSrcBtn { "KITS" }, deckModeBtn { "DECK" }, fileBtn { "File" }, playTop { "Play" }, stopTop { "Stop" },
-                     editTab { "EDIT" }, browseTab { "BROWSE" }, keysTab { "KEYS" }, seqTab { "STEP SEQ" }, shapeTab { "SHAPE" };
+                     editTab { "EDIT" }, browseTab { "BROWSE" }, keysTab { "KEYS" }, seqTab { "STEP SEQ" }, shapeTab { "SHAPE" }, tracksTab { "TRACKS" }, boothBtn { "BOOTH" };
     LabeledKnob level { "LEVEL", " dB", Theme::amber }, pan { "PAN", "", Theme::green }, tune { "TUNE", " st", Theme::amber },
                 choke { "CHOKE", "", Theme::amber };
     juce::ComboBox kitBox, padInstBox;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> padInstAtt;
     int shownPadsInst = -1;
     void syncPadSource();
+    void applyScale (float s);
+    float shownScale = 1.f;
     juce::StringArray kitKeys;
     std::unique_ptr<juce::FileChooser> chooser;
     int selPad = 0, drawer = 1, rightMode = 0, lastMapVersion = -1;   // drawer: 0 keys, 1 step seq, 2 shape.  rightMode: 0 edit, 1 browse

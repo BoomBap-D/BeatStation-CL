@@ -189,3 +189,110 @@ Your Room Reverb 0.1.1 is now part of Beat Station: FX > **ROOM** tab. It sits o
 - All room settings are saved with the project.
 
 Checked here: the ported engine was run at 44.1, 48 and 96 kHz on six presets. Output stayed finite and the measured decay followed the DECAY setting (for example 2.80 s set, 2.68 s measured).
+
+## Phase 10 - the effects suite
+
+The FX window is now a full effects chain on the output, with one-click presets.
+
+**The chain (the row of tabs at the top)**
+- Eleven effects: EQ, COMP, DRIVE, FILTER, CRUSH, PUNCH, CHORUS, DELAY, ROOM, WIDTH, LIMITER.
+- Sound goes through the tabs left to right, then to the OUT meter.
+- Click a tab to open that effect's screen. Click the light on a tab to switch the effect on or off. Drag a tab sideways to move it in the chain. The order is saved with the project.
+
+**The new effects** (`FxDsp.h`, plain C++ so each one can be tested on its own)
+- **DRIVE** - Tape, Tube or Clip saturation. Runs at twice the sample rate with anti-aliasing on top. Screen: the input/output curve with a dot riding it.
+- **FILTER** - low-pass, high-pass, band-pass, notch; 12 or 24 dB; resonance; an LFO for sweeps. Screen: the response curve, moving with the LFO.
+- **CRUSH** - old-sampler sound: sample rate, bit depth and an output filter. Screen: a smooth wave and the stepped wave it becomes.
+- **PUNCH** - transient shaper: Attack makes hits harder or softer, Sustain lengthens or tightens tails. Screen: scrolling level with the gain it applies.
+- **CHORUS** - two moving delays per side; short delay + feedback gives a flanger. Screen: the left and right movement.
+- **DELAY** - tempo-synced or free, ping-pong, repeats get darker and thinner each time round. Screen: each repeat as a bar, left above and right below, against the beat.
+- **WIDTH** - stereo width, and "Mono below" to keep the low end in the centre. Screen: stereo scope and a mono-safety bar.
+- **LIMITER** - 3 ms look-ahead, the output never passes the ceiling. Screen: level in, the ceiling, and how much is being held back.
+
+**Presets (61)** - the PRESET bar under the tabs: click the name for the menu, or use < and >.
+Start Here, Drums, 808 & Bass, Sampling & Lo-Fi, Vocals, Keys & Melody, Mix Bus, Mastering, Creative & DJ.
+A preset sets which effects are on, their order and every control. They are plain text recipes in `FxPresets.h`, so adding more is one line each.
+
+**EQ and compressor colours**
+- EQ: the spectrum is drawn in the band colours from low to high; each band's boost or cut is filled in its own colour; the three knobs light up in the colour of the band you picked.
+- Compressor: incoming level in blue, gain reduction in red, knobs in the compressor's colour.
+
+**Tested here** (offline, at 48 kHz):
+- DRIVE: aliasing from a hard-driven 5 kHz tone is 73 to 133 dB below the tone (a plain waveshaper measures about 20 dB). Flat within 0.2 dB to 20 kHz when not driving.
+- LIMITER: output never exceeded the ceiling with up to +24 dB of gain, noise bursts and spikes; untouched below the ceiling.
+- DELAY: echo times exact to the sample; ping-pong alternates sides; maximum feedback cannot run away.
+- FILTER slopes, CRUSH transparency at full settings, WIDTH at 0 (true mono) and 1 (unchanged), PUNCH directions: all as designed.
+
+**Notes**
+- The chain is on the whole output for now. Per-pad and per-track effects come with the mixer.
+- DRIVE adds 23 samples of delay and LIMITER adds 3 ms when they are on. This is not reported to a DAW yet.
+- The EQ and compressor each have their own tab now; the old side-by-side "BOTH" view is gone.
+
+## Phase 11 - multitrack audio and the Vocal Booth
+
+**Keyboard into the step sequencer (fix)**
+- Recording only happens while the beat is playing, and before this build REC did not start it. Now REC starts the beat if it is stopped.
+- The KEYS tab has its own **REC TO STEPS** button: it switches Keys on, starts the beat and records each key you play onto its own track.
+
+**TRACKS tab (next to KEYS, STEP SEQ, SHAPE)** - eight audio tracks that play in time with the beat
+- Click a track's round light to arm it, press **REC** (the beat starts and the take begins), press Stop to end the take. REC switches itself off after each take.
+- The armed track shows the input level, and the IN meter shows the input while a track is armed.
+- Each track: M (mute), S (solo), volume (drag; double-click resets), and the recording drawn against time.
+- Click in a recording area to choose where Play starts from (green line).
+- Right-click a name: rename, clear, load an audio file, or switch "goes through the Booth" on or off.
+- **MONITOR** lets you hear the input through the Booth while recording. Use headphones or it will feed back.
+- Takes are saved as WAV files (user data folder > Basement Instruments > Beat Station > Recordings) and are reloaded with the project.
+- Tracks 1-4 (Lead Vocal, Double, Ad-Libs, Hook) start as Booth tracks. Tracks 5-8 go straight to the mix.
+
+**BOOTH (button in the title bar)** - the vocal page
+- **10 microphone characters** plus Off. Each one sets low-end weight, where the presence lift sits, how much air is on top, and how much valve colour:
+  800 Air (Sony C-800G style), 87 Studio (Neumann U 87), 47 Tube (U 47), 67 Tube (U 67), 251 Silk (ELA M 251), C12 Open (AKG C12),
+  49 Velvet (M 49), 7B Broadcast (Shure SM7B), 44 Ribbon (RCA 44), Reference Modern (Manley Reference Cardioid).
+  They are tonal characters built from published descriptions of those microphones, not measurements of them, and they assume a fairly neutral microphone on your side.
+- The character is added **while you listen**, so you can record first and choose a different microphone afterwards.
+- **BURN IN THE MIC**: when lit, the character is recorded into the take ("MIC BURNED IN" shows on it) and is not applied again on playback.
+- **The vocal chain**: MIC > GATE > DE-ESS > COMP > EQ > DRIVE > DOUBLER > DELAY > REVERB > the mix. Click a tab for its knobs, click its light for on/off, drag a tab to reorder. The order is saved with the project.
+- **Tone graph**: the microphone curve (amber), the vocal EQ (green) and both together (white). The drawn curve was checked against the measured sound (within 0.02 dB).
+- **Meters**: voice in, gate, de-ess, compression, booth out.
+- **50 vocal chain presets, 30 of them hip-hop**: Leads (12), Ad-Libs & Doubles (6), Hooks & Melodic (7), Character (5); then R&B & Soul, Pop, Rock & Alternative, Reggae/Dancehall/Afrobeats, Gospel/Country/Jazz/Spoken.
+- The four vocal tracks are shown at the bottom of the Booth with their own REC / Play / Stop. They are the same tracks 1-4 as in the TRACKS tab.
+- The Booth's output joins the main mix and then goes through the master effects chain.
+
+**Limits in this build**
+- One recording per track (a new take replaces the old one). No takes list, punch-in, editing or moving clips yet.
+- The Booth is one chain shared by all Booth tracks, so they all get the same microphone and effects.
+- One compressor stage (many rap chains use two), and no pitch correction (Auto-Tune style) yet.
+- No latency compensation: on a slow audio setup a take can land slightly late.
+- Standalone: the audio input is muted by default. Options > Audio/MIDI Settings: choose your input and untick "Mute audio input".
+- The window is 60 pixels wider (1192) to fit the BOOTH button.
+
+## Phase 12 - punch recording and pitch correction
+
+**Punch recording** (TRACKS tab and the Booth: the "punch" dropdown next to MONITOR)
+Every pass is captured from the moment Play starts. The punch mode decides which part of it is kept. Only that part of the track is replaced
+(8 ms crossfades at the joins); the rest of the old take stays.
+- **Whole take** - everything from where Play started.
+- **Manual punch** - REC rolls the song and you hear the old take. Press **PUNCH** to drop in, press it again to drop out.
+- **Auto punch (IN / OUT)** - right-click the armed track's recording area: "Set punch IN here", "Set punch OUT here". REC then replaces only between them. The points are drawn in red.
+- **Match punch (my last take)** - exclusive to Beat Station. Press REC and rap along with your last take. It compares your loudness with the old take's.
+  When the two have stayed within 6 dB of each other for a quarter of a second it drops in by itself, and it places the join at the gap before
+  that phrase (a breath), not in the middle of a word. If you came in later than the start of the phrase, the join goes where you came in.
+  If you never rap, nothing is replaced. The header shows "LISTENING... you -20 dB / last take -22 dB" and then "PUNCHED IN".
+- **Undo the last take** - right-click a recording area. Works after any take, punch or clear (choose it again to redo).
+- A punch into an existing take is recorded the same way that take was (mic burned in or not), so the two halves match.
+
+**TUNE (pitch correction)** - Booth, second tab, straight after MIC
+- Finds the note being sung and moves the voice to the nearest note of the key and scale you choose.
+- **KEY** (C to B), **SCALE** (Chromatic, Major, Minor, Major pentatonic, Minor pentatonic, Blues), **SPEED** (0 ms = the hard, robotic snap; 100-300 ms = natural), **AMOUNT**.
+- The screen shows the note it is moving you to in large type, how many cents sharp or flat you are, and a scrolling picture: grey = what you sang, colour = where it was moved to, against the notes of the scale.
+- Every vocal track has its own tuner (it can only follow one voice at a time), all sharing the same key, scale and speed.
+- It is not recorded into the take: change the key or switch it off later. Vocal chain presets leave TUNE alone, because the key belongs to the song.
+- It delays the voice by about 27 ms. Recorded tracks are played early by that amount so they stay in time. The live monitor signal is 27 ms late while TUNE is on.
+
+**Tested here** (offline)
+- TUNE on voice-like test tones at 44.1, 48 and 96 kHz: output landed within about 1 cent of the target note in every case (e.g. 225 Hz in -> 220.02 Hz out;
+  270 Hz in C major -> 261.62 Hz, skipping C#). Level changed by less than 0.1 dB. With Amount at 0 the output is a clean delayed copy.
+  Breath and noise pass through at the same level. Cost: about 1.5% of one CPU core per voice.
+- Match punch detector, simulated on five cases: joining at the start of a phrase (same level; 4 dB louder and early; 3 dB quieter), joining mid-phrase, and never rapping.
+  It placed the join at the phrase start in the first three, where the performer came in for the fourth, and left the take alone in the fifth.
+- These were synthetic signals. Real voices (breathy, raspy, very fast) will need tuning by ear.

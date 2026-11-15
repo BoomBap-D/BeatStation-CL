@@ -1,39 +1,45 @@
-# Beat Station Phase 9 — JUCE 7 Port + Build Notes (Nov 14, 2026)
+# Beat Station Phase 12 — JUCE 7 Port + Build Notes (Nov 15, 2026)
 
-## What Phase 9 contains (verified against Phase 7, file by file)
-Phases 8 and 9 together (no separate Phase 8 was sent). 11 files
-changed plus 5 new Room files (RoomEngine.h, RoomFigures.h, RoomFx.h,
-RoomPresets.h, RoomView.h):
-- **Phase 8 — sequencer overhaul:** tracks are no longer fixed at 4 —
-  "+ Track" adds up to 64, the list scrolls; a track plays a pad OR a
-  Keys note; recording pads/keys auto-creates their tracks; Length is
-  1/2/4/8 bars with bar-step buttons; right-click a track to rename,
-  clear or delete; old 4-track projects convert. Centre-zero knobs
-  (pan, tune, EQ gain, filter env) light outwards from the top-centre
-  line. CLIP lights are glossy red and latch until clicked. Window
-  size menu (File): 75%–200% or Fit to screen, saved with the project.
-- **Phase 9 — Room Reverb built in:** their Room Reverb 0.1.1 engine
-  (24 wall reflections + 8-line diffuse tail, whole-sample prime tail
-  delays, new LOW CUT knob) sits in the master chain after EQ/comp as
-  FX > ROOM, starting off. All 104 factory rooms with search and
-  categories; charcoal/amber look; rapper/singer vector figures
-  (RoomFigures.h SVG); drag performer/listener, 3D or plan view,
-  HEAR WET, 19 knobs, all MIDI-learnable; settings save with the project.
+## What Phase 12 contains (verified against Phase 9, file by file)
+Phases 10, 11 and 12 in one zip (no separate 10/11 sent). 12 files
+changed plus 8 new: Booth.h, BoothPanel.h, BoothPresets.h, FxChain.h,
+FxDsp.h, FxPresets.h, FxViews.h, TracksPanel.h.
+- **Phase 10 — effects suite:** the FX window is a chain of 11 effects
+  (EQ, COMP, DRIVE, FILTER, CRUSH, PUNCH, CHORUS, DELAY, ROOM, WIDTH,
+  LIMITER) — click a tab's light for on/off, drag tabs to reorder,
+  order saved with the project. 61 chain presets in 9 categories.
+  DRIVE and LIMITER add latency that is not yet reported to a DAW.
+- **Phase 11 — multitrack + Vocal Booth:** TRACKS tab with 8 audio
+  tracks in time with the beat (arm, REC, mute/solo/volume, WAV takes
+  saved and reloaded; tracks 1–4 are Booth tracks). BOOTH page
+  (title-bar button): 10 microphone characters + Off (tonal characters
+  from published descriptions, not measurements), BURN IN THE MIC,
+  vocal chain MIC > GATE > DE-ESS > COMP > EQ > DRIVE > DOUBLER >
+  DELAY > REVERB (reorderable), tone graph, meters, 50 vocal presets
+  (30 hip-hop). KEYS gets REC TO STEPS. Limits per its README: one
+  take per track, one shared Booth chain, no pitch correction (that
+  arrives in Phase 12), no latency compensation on takes.
+- **Phase 12 — punch + pitch:** punch recording on TRACKS and in the
+  Booth (Whole take / Manual / Auto IN-OUT / Match punch — drops in
+  by itself when your level matches your last take, join placed at a
+  breath; undo/redo of the last take). TUNE pitch correction in the
+  Booth (key, scale, speed, amount; per-track tuner, not recorded
+  into the take; ~27 ms delay compensated on playback).
 
-## The port (same standard way as Phase 4–7)
+## The port (same standard way as Phase 4–9)
 - **JUCE 8.0.4 → JUCE 7.0.12.** JUCE 8's deployment target is Windows 10
   only. JUCE 7.0.12's README lists its Windows deployment target as
   Vista onward — this build covers **Windows 7, 8, 8.1, 10 and 11**,
-  including D's Windows 8.1 Pro PC. Port surface: 27
+  including D's Windows 8.1 Pro PC. Port surface: 44
   `juce::Font(juce::FontOptions(...))` calls converted to JUCE 7
   `juce::Font(size, style)`.
 - Bugs fixed again: missing `juce_audio_devices` (include + CMake
-  link); three `juce::jmin<juce::int64>` calls → `std::min`.
-  `TextBoxLeft` from Phase 7 stands as written (JUCE 7 has it).
-- The ported Phase 9 tree was diffed against the ported Phase 7 tree:
-  exactly the same files differ — nothing else moved.
+  link); `juce::jmin<juce::int64>` → `std::min`, now in FOUR places
+  (a fourth sample loader lives in the new Booth.h).
+- The ported Phase 12 tree was diffed against the ported Phase 9 tree:
+  the same 20 files differ — nothing else moved.
 
-## Verification (Linux, Nov 14, 2026)
+## Verification (Linux, Nov 15, 2026)
 - JUCE 7.0.12 build result, artefact sizes, dlopen/GetPluginFactory
   and the running-build screenshots are recorded with the delivery in
   the VST WORK chat.

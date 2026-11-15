@@ -24,6 +24,7 @@ public:
 
         // Tick scale with lit trail
         constexpr int numTicks = 21;
+        const bool bipolar = (bool) slider.getProperties().getWithDefault ("bipolar", false);
         for (int i = 0; i < numTicks; ++i)
         {
             const float t = (float) i / (float) (numTicks - 1);
@@ -31,14 +32,21 @@ public:
             const bool major = (i % 5 == 0);
             const juce::Point<float> dir (std::sin (a), -std::cos (a));
             const juce::Line<float> tick (c + dir * (r * (major ? 0.76f : 0.82f)), c + dir * (r * 0.95f));
-            const float lit = juce::jlimit (0.f, 1.f, pos * (float) (numTicks - 1) - (float) i + 1.f);
+            // Normal knobs light up from the minimum. Centre-zero knobs (pan, tune, gain) light outwards from the top:
+            // nothing lit in the middle, lights to the left going left, lights to the right going right.
+            float lit;
+            if (! bipolar) lit = juce::jlimit (0.f, 1.f, pos * (float) (numTicks - 1) - (float) i + 1.f);
+            else if (pos > 0.5f) lit = t > 0.5f ? juce::jlimit (0.f, 1.f, (pos - t) * (float) (numTicks - 1) + 1.f) : 0.f;
+            else                 lit = t < 0.5f ? juce::jlimit (0.f, 1.f, (t - pos) * (float) (numTicks - 1) + 1.f) : 0.f;
+            if (bipolar && std::abs (pos - 0.5f) < 0.004f) lit = 0.f;
 
             if (lit > 0.f)
             {
                 g.setColour (accent.withAlpha (0.30f * lit));
                 g.drawLine (tick, 5.f);                      // glow
             }
-            g.setColour (Theme::tickOff.interpolatedWith (accent, lit));
+            const bool centreMark = bipolar && i == numTicks / 2;         // the line at the top that marks the centre
+            g.setColour (centreMark ? Theme::cream : Theme::tickOff.interpolatedWith (accent, lit));
             g.drawLine (tick, major ? 2.4f : 1.8f);
         }
 
