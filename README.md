@@ -153,3 +153,39 @@ Also fixed: SeqPanel used `Slider::TextBoxInside`, which does not exist in JUCE 
 - "< Back" (where you just were), "Up" (one folder up) and a new "Home" (your main folders).
 - Clicking a sound only auditions it, however fast you click. Double-click opens folders and no longer loads sounds. To load: the Load button, Enter, right-click, Shift+click, or drag onto a pad.
 - "Next pad after load" now starts switched off.
+
+## Phase 8 - sequencer overhaul, pan knob, clip lights, window size
+
+**Step sequencer**
+- Tracks are no longer fixed at 4. Use "+ Track" to add one (up to 64). The list scrolls.
+- A track plays a pad OR one key of the Keys instrument. Click the box at the left of a row: Pads > Pad 1-16, or Keys > the note.
+- Recording the keyboard: switch Keys ON, press Play and REC, and play. Each key you play gets its own track ("Key C3", "Key E3"...), made automatically.
+- Recording pads: with REC on, any pad you hit is recorded. If that pad has no track yet, one is made for it automatically.
+- "Length" is one button: 1, 2, 4 or 8 bars (16 to 128 steps). The "<" and ">" buttons next to it move between bars.
+- Right-click a track name: rename, clear its steps, or delete the track. Click the name to hear it. M mutes.
+- Old projects (4 tracks x 32 steps) open and are converted.
+- Key tracks play whatever instrument is chosen in KEYS at the time (one instrument for all key tracks for now).
+
+**Knobs**: any knob with zero in the middle (pan, tune, EQ gain, filter envelope amount) now shows a line at the top centre and lights outwards from it: left when turned left, right when turned right, nothing lit in the middle.
+
+**CLIP lights**: glossy red with the word CLIP, and they stay on until you click them.
+
+**Window size**: File > Window size: 75% to 200%, or "Fit to screen". The whole interface scales. The size is saved with the project.
+
+## Phase 9 - Room Reverb built in
+
+Your Room Reverb 0.1.1 is now part of Beat Station: FX > **ROOM** tab. It sits on the master chain after the EQ and compressor and starts switched off.
+
+- **Same engine** (`RoomEngine.h`: 24 wall reflections + 8-line diffuse tail), with these changes for a cleaner, more exact sound:
+  - the eight tail delays are whole-sample, all-prime lengths: no shared resonances and no interpolation blur once a setting has settled
+  - early reflections land on exact samples, so they keep their full treble
+  - new **LOW CUT** knob (20-600 Hz, default 90 Hz) on the reverb only, so the low end of the mix stays tight
+  - reflections are recalculated only when a control moves (less CPU)
+  - when ROOM is off it fades out and then uses no CPU
+- **All 104 factory rooms** are in the list on the left, with search and categories. Picking one switches the reverb on.
+- **The look** now matches Beat Station: charcoal and amber, the vintage knobs with lit ticks, the same panels and fonts.
+- **Rapper and singer** are new shaded vector figures (clothing, cap, chain, mic, mic stand, hair) instead of the block figures. They are drawings, not photos, and stay sharp at any window size. They live in `RoomFigures.h` as SVG, so they are easy to swap for other artwork later.
+- Drag the performer or the listener in the picture. 3D view or top-down plan. Surface shortcuts, HEAR WET and all 19 knobs are there, and every knob can be MIDI-learned (right-click).
+- All room settings are saved with the project.
+
+Checked here: the ported engine was run at 44.1, 48 and 96 kHz on six presets. Output stayed finite and the measured decay followed the DECAY setting (for example 2.80 s set, 2.68 s measured).

@@ -1,46 +1,41 @@
-# Beat Station Phase 7 — JUCE 7 Port + Build Notes (Nov 14, 2026)
+# Beat Station Phase 9 — JUCE 7 Port + Build Notes (Nov 14, 2026)
 
-## What Phase 7 contains (verified against Phase 5b, file by file)
-This zip carries Phase 6 and Phase 7 together (no separate Phase 6 was
-sent). 9 files changed plus 1 new file, TurntablePanel.h:
-- **Phase 6 — DECK:** a turntable page (DECK button swaps the pad bank
-  for it; sequencer/keys/shape/FX stay). Scratch by dragging the
-  platter, START/STOP with spin-up/brake, 33/45, REVERSE, LOOP, pitch
-  fader with ±8/16/50 range, load a pad's whole sample or any file,
-  hot cues from chop points, waveform strip, CUT FADER / HOLD CUT.
-  Deck state saving, scratch recorder, second deck, key lock and sync
-  are NOT in this phase (per its README — they come next).
-- **Phase 7 — input rules:** IN meter = outside sound only (browser
-  auditions, audio input while REC is on, loaded samples at their
-  incoming level); pad level/pan/envelope/filter move OUT only.
-  INPUT VOL knob under the IN meter (double-click = 0 dB; a loaded
-  sample keeps the knob's level from load time). REC button under the
-  IN meter records up to 60 s onto the selected pad and saves a WAV
-  (standalone: untick "Mute audio input" in Options > Audio/MIDI
-  Settings; the plugin also gains an optional stereo input).
-  INSTRUMENT / DRUM SET switch on the keyboard; KITS / INSTR switch on
-  the pads (INSTR = pads play one instrument as 16 notes from C3).
-  Browser: Back/Up/Home, click only auditions, double-click no longer
-  loads, "Next pad after load" starts off.
+## What Phase 9 contains (verified against Phase 7, file by file)
+Phases 8 and 9 together (no separate Phase 8 was sent). 11 files
+changed plus 5 new Room files (RoomEngine.h, RoomFigures.h, RoomFx.h,
+RoomPresets.h, RoomView.h):
+- **Phase 8 — sequencer overhaul:** tracks are no longer fixed at 4 —
+  "+ Track" adds up to 64, the list scrolls; a track plays a pad OR a
+  Keys note; recording pads/keys auto-creates their tracks; Length is
+  1/2/4/8 bars with bar-step buttons; right-click a track to rename,
+  clear or delete; old 4-track projects convert. Centre-zero knobs
+  (pan, tune, EQ gain, filter env) light outwards from the top-centre
+  line. CLIP lights are glossy red and latch until clicked. Window
+  size menu (File): 75%–200% or Fit to screen, saved with the project.
+- **Phase 9 — Room Reverb built in:** their Room Reverb 0.1.1 engine
+  (24 wall reflections + 8-line diffuse tail, whole-sample prime tail
+  delays, new LOW CUT knob) sits in the master chain after EQ/comp as
+  FX > ROOM, starting off. All 104 factory rooms with search and
+  categories; charcoal/amber look; rapper/singer vector figures
+  (RoomFigures.h SVG); drag performer/listener, 3D or plan view,
+  HEAR WET, 19 knobs, all MIDI-learnable; settings save with the project.
 
-## The port (same standard way as Phase 4 / 5 / 5b)
+## The port (same standard way as Phase 4–7)
 - **JUCE 8.0.4 → JUCE 7.0.12.** JUCE 8's deployment target is Windows 10
   only. JUCE 7.0.12's README lists its Windows deployment target as
   Vista onward — this build covers **Windows 7, 8, 8.1, 10 and 11**,
-  including D's Windows 8.1 Pro PC. Port surface: 24
+  including D's Windows 8.1 Pro PC. Port surface: 27
   `juce::Font(juce::FontOptions(...))` calls converted to JUCE 7
-  `juce::Font(size, style)` (the new TurntablePanel.h alone had 8).
-- Bug fixes: missing `juce_audio_devices` (include + CMake link) was
-  back again — fixed. The `jmin<int64>` collision was back, now in
-  THREE places (a third sample loader for the deck) — all → `std::min`.
-- One bug they fixed themselves: `Slider::TextBoxInside` is now
-  `TextBoxLeft`, which exists in JUCE 7 — left as they wrote it.
-- The ported Phase 7 tree was diffed against the ported Phase 5b tree:
-  exactly the same 9 files + TurntablePanel.h differ — nothing else moved.
+  `juce::Font(size, style)`.
+- Bugs fixed again: missing `juce_audio_devices` (include + CMake
+  link); three `juce::jmin<juce::int64>` calls → `std::min`.
+  `TextBoxLeft` from Phase 7 stands as written (JUCE 7 has it).
+- The ported Phase 9 tree was diffed against the ported Phase 7 tree:
+  exactly the same files differ — nothing else moved.
 
 ## Verification (Linux, Nov 14, 2026)
 - JUCE 7.0.12 build result, artefact sizes, dlopen/GetPluginFactory
-  and the running-build screenshot are recorded with the delivery in
+  and the running-build screenshots are recorded with the delivery in
   the VST WORK chat.
 - The Windows build runs on GitHub (repo BoomBap-D/BeatStation-CL) —
   download BeatStation-Windows from the run and run `Beat Station.exe`

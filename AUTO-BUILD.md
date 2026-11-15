@@ -1,4 +1,4 @@
-# Beat Station Phase 7 — Update on GitHub (browser upload)
+# Beat Station Phase 9 — Update on GitHub (browser upload)
 
 Phase 5 goes into the SAME repo as Phase 4: **BoomBap-D/BeatStation-CL**.
 The build workflow is already in that repo and in this package, and it
@@ -11,7 +11,7 @@ starts by itself on every upload. You never compile anything on your PC.
 3. Select ALL of this package's contents (Ctrl+A — including the
    `.github` folder) and drag them into the upload page. Upload the
    CONTENTS, not the outer folder itself. Same-name files are replaced;
-   Phase 7's files are added.
+   Phase 9's files are added.
 4. **Commit changes.** The build starts by itself.
 
 ## Getting your Windows build
