@@ -17,12 +17,37 @@ public:
         instAtt = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (p.apvts, ParamID::keysInst, instBox);
         instBox.onChange = [this]                                       // choosing an instrument also switches Keys on, so you hear it
         {
+            if (! isShowing() || proc.padsInst.load()) return;          // not when a project loads, or when the pads are the ones playing the instrument
             if (auto* prm = proc.apvts.getParameter (ParamID::keysMode)) prm->setValueNotifyingHost (1.f);
         };
         keysOn.setClickingTogglesState (true);
         keysOnAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (p.apvts, ParamID::keysMode, keysOn);
         addAndMakeVisible (instBox);
         addAndMakeVisible (keysOn);
+
+        // INSTRUMENT / DRUM SET: click the word to switch what the keyboard plays
+        kitKeys = BeatStationProcessor::getKitKeys();
+        for (int i = 0; i < kitKeys.size(); ++i) kitBox.addItem (BeatStationProcessor::kitDisplayName (kitKeys[i]), i + 1);
+        kitBox.setTextWhenNothingSelected ("Choose a drum set...");
+        kitBox.setColour (juce::ComboBox::backgroundColourId, Theme::panel);
+        kitBox.setColour (juce::ComboBox::textColourId, Theme::text);
+        kitBox.setColour (juce::ComboBox::outlineColourId, Theme::grid);
+        kitBox.setColour (juce::ComboBox::arrowColourId, Theme::amber);
+        kitBox.onChange = [this]
+        {
+            const int i = kitBox.getSelectedItemIndex();
+            if (i >= 0) { proc.loadKit (kitKeys[i]); if (onKitLoaded) onKitLoaded(); }
+        };
+        srcBtn.setColour (juce::TextButton::textColourOffId, Theme::amber);
+        srcBtn.onClick = [this]
+        {
+            proc.keysDrums = ! proc.keysDrums.load();
+            if (auto* prm = proc.apvts.getParameter (ParamID::keysMode)) prm->setValueNotifyingHost (1.f);   // so you hear it straight away
+            sync();
+        };
+        addAndMakeVisible (srcBtn);
+        addChildComponent (kitBox);
+        sync();
 
         keys.setAvailableRange (21, 108);                              // A0 to C8 = 88 keys
         keys.setScrollButtonWidth (0);                                 // we draw our own arrows and slider
@@ -55,8 +80,10 @@ public:
     {
         auto r = getLocalBounds();
         auto top = r.removeFromTop (30);
-        top.removeFromLeft (96);                                        // "INSTRUMENT" label is painted here
-        instBox.setBounds (top.removeFromLeft (260));  top.removeFromLeft (8);
+        srcBtn.setBounds (top.removeFromLeft (104));   top.removeFromLeft (8);
+        const auto box = top.removeFromLeft (260);     top.removeFromLeft (8);
+        instBox.setBounds (box);
+        kitBox.setBounds (box);
         keysOn.setBounds (top.removeFromLeft (90));
         r.removeFromTop (4);
         auto bottom = r.removeFromBottom (26);
@@ -68,17 +95,24 @@ public:
         keys.setKeyWidth (juce::jmax (24.f, (float) r.getWidth() / 14.f));   // 14 white keys = two octaves
     }
 
-    void paint (juce::Graphics& g) override
+    std::function<void()> onKitLoaded;
+
+    void sync()                                                         // also called by the editor's timer, so a loaded project shows correctly
     {
-        g.setColour (Theme::dim);
-        g.setFont (juce::Font (11.f, juce::Font::bold));
-        g.drawText ("INSTRUMENT", 0, 0, 92, 30, juce::Justification::centredLeft);
+        const bool drums = proc.keysDrums.load();
+        if ((int) drums == shownDrums) return;
+        shownDrums = (int) drums;
+        srcBtn.setButtonText (drums ? "DRUM SET" : "INSTRUMENT");
+        instBox.setVisible (! drums);
+        kitBox.setVisible (drums);
     }
 
 private:
     BeatStationProcessor& proc;
-    juce::ComboBox instBox;
-    juce::TextButton keysOn { "Keys ON" };
+    juce::ComboBox instBox, kitBox;
+    juce::StringArray kitKeys;
+    juce::TextButton keysOn { "Keys ON" }, srcBtn { "INSTRUMENT" };
+    int shownDrums = -1;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> instAtt;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> keysOnAtt;
     juce::MidiKeyboardComponent keys;

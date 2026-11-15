@@ -2,10 +2,10 @@
 
 BeatStationEditor::BeatStationEditor (BeatStationProcessor& p)
     : AudioProcessorEditor (&p), proc (p), inMeter (p, 0, "IN"), outMeter (p, 1, "OUT"), pads (p), wave (p), browser (p), seq (p), shape (p),
-      keyboard (p), fx (p)
+      keyboard (p), fx (p), turntable (p)
 {
     setLookAndFeel (&lnf);
-    for (auto* c : std::initializer_list<juce::Component*> { &inMeter, &outMeter, &pads, &wave, &browser, &seq, &shape, &keyboard, &fx, &fxBtn, &fileBtn,
+    for (auto* c : std::initializer_list<juce::Component*> { &inMeter, &outMeter, &pads, &wave, &browser, &seq, &shape, &keyboard, &fx, &turntable, &padsModeBtn, &deckModeBtn, &padSrcBtn, &fxBtn, &fileBtn,
                                                               &loadBtn, &clearBtn, &clearChopsBtn, &fullBtn, &modeBtn, &keysBtn,
                                                               &chop4, &chop8, &chop16, &chopHits, &stopBtn, &playTop, &stopTop,
                                                               &editTab, &browseTab, &keysTab, &seqTab, &shapeTab, &kitBox,
@@ -28,6 +28,20 @@ BeatStationEditor::BeatStationEditor (BeatStationProcessor& p)
         if (i >= 0) { proc.loadKit (kitKeys[i]); refreshAfterEdit(); }
     };
 
+    // KITS / INSTR: what the pads play. KITS = their samples. INSTR = the chosen instrument, 16 notes going up from C3.
+    padInstBox.addItemList (keysInstrumentNames(), 1);
+    padInstBox.setColour (juce::ComboBox::backgroundColourId, Theme::panel);
+    padInstBox.setColour (juce::ComboBox::textColourId, Theme::text);
+    padInstBox.setColour (juce::ComboBox::outlineColourId, Theme::grid);
+    padInstBox.setColour (juce::ComboBox::arrowColourId, Theme::amber);
+    padInstAtt = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (proc.apvts, ParamID::keysInst, padInstBox);
+    addChildComponent (padInstBox);
+    padSrcBtn.setColour (juce::TextButton::textColourOffId, Theme::amber);
+    padSrcBtn.onClick = [this] { proc.padsInst = ! proc.padsInst.load(); syncPadSource(); };
+    keyboard.onKitLoaded = [this] { refreshAfterEdit(); };
+    inMeter.onRecorded = [this] { refreshAfterEdit(); };
+    syncPadSource();
+
     pads.onSelect = [this] (int i) { selectPad (i); };
     pads.onSamplesChanged = [this] { refreshAfterEdit(); };
     pads.onRightClick = [this] (int i) { showLearnMenu ("pad:" + juce::String (i)); };
@@ -44,6 +58,8 @@ BeatStationEditor::BeatStationEditor (BeatStationProcessor& p)
     browser.onLoadToPad = [this] (const juce::File& f, int pad) { proc.loadSample (pad, f); selectPad (pad); refreshAfterEdit(); };
     fx.onBack = [this] { fxMode = false; updateView(); };
     fxBtn.onClick = [this] { fxMode = ! fxMode; updateView(); };
+    padsModeBtn.onClick = [this] { deckMode = false; fxMode = false; updateView(); };
+    deckModeBtn.onClick = [this] { deckMode = true;  fxMode = false; updateView(); };
     fileBtn.onClick = [this] { showFileMenu(); };
     seq.onLearnMenu = [this] (const juce::String& target) { showLearnMenu (target); };
     for (auto* b : { &playTop, &stopTop, &stopBtn }) b->addMouseListener (this, false);
@@ -109,17 +125,28 @@ BeatStationEditor::BeatStationEditor (BeatStationProcessor& p)
     selectPad (0);
     updateView();
     setWantsKeyboardFocus (true);
-    setSize (1032, 730);
+    setSize (1132, 730);
     startTimerHz (15);
+}
+
+void BeatStationEditor::syncPadSource()
+{
+    const int inst = proc.padsInst.load() ? 1 : 0;
+    if (inst == shownPadsInst) return;
+    shownPadsInst = inst;
+    padSrcBtn.setButtonText (inst ? "INSTR" : "KITS");
+    kitBox.setVisible (! inst);
+    padInstBox.setVisible (inst);
 }
 
 void BeatStationEditor::updateRightMode()
 {
     const bool edit = rightMode == 0;
+    const bool padView = ! deckMode;
     for (auto* c : std::initializer_list<juce::Component*> { &wave, &loadBtn, &clearBtn, &clearChopsBtn, &fullBtn, &modeBtn, &keysBtn,
                                                               &chop4, &chop8, &chop16, &chopHits, &level, &pan, &tune, &choke })
-        c->setVisible (edit && ! fxMode);
-    browser.setVisible (! edit && ! fxMode);
+        c->setVisible (edit && ! fxMode && padView);
+    browser.setVisible (! edit && ! fxMode && padView);
     editTab.setToggleState (edit, juce::dontSendNotification);
     browseTab.setToggleState (! edit, juce::dontSendNotification);
     repaint();
@@ -127,7 +154,11 @@ void BeatStationEditor::updateRightMode()
 
 void BeatStationEditor::updateView()
 {
-    for (auto* c : std::initializer_list<juce::Component*> { &pads, &editTab, &browseTab, &keysTab, &seqTab, &shapeTab }) c->setVisible (! fxMode);
+    for (auto* c : std::initializer_list<juce::Component*> { &pads, &editTab, &browseTab }) c->setVisible (! fxMode && ! deckMode);
+    for (auto* c : std::initializer_list<juce::Component*> { &keysTab, &seqTab, &shapeTab }) c->setVisible (! fxMode);
+    turntable.setVisible (deckMode && ! fxMode);
+    padsModeBtn.setToggleState (! deckMode, juce::dontSendNotification);
+    deckModeBtn.setToggleState (deckMode, juce::dontSendNotification);
     fx.setVisible (fxMode);
     fxBtn.setToggleState (fxMode, juce::dontSendNotification);
     updateRightMode();
@@ -195,6 +226,7 @@ void BeatStationEditor::selectPad (int i)
 {
     selPad = pads.selected = i;
     proc.selectedPad = i;
+    turntable.setSelectedPad (i);
     level.attach (proc.apvts, ParamID::level (i));
     pan.attach (proc.apvts, ParamID::pan (i));
     tune.attach (proc.apvts, ParamID::tune (i));
@@ -257,6 +289,8 @@ bool BeatStationEditor::keyPressed (const juce::KeyPress& k)
 
 void BeatStationEditor::timerCallback()
 {
+    keyboard.sync();
+    syncPadSource();
     const bool learning = proc.getLearnTarget().isNotEmpty();
     const int version = proc.mapVersion.load(), lm = proc.lastMidi.load();
     const bool playing = proc.playing.load();
@@ -284,14 +318,19 @@ void BeatStationEditor::resized()
     fileBtn.setBounds (title.removeFromRight (56).withSizeKeepingCentre (56, 30));
     title.removeFromRight (4);
     midiBtn.setBounds (title.removeFromRight (60).withSizeKeepingCentre (60, 30));
-    kitBox.setBounds (titleRect.getX() + 210, titleRect.getY() + 8, 170, 28);
-    playTop.setBounds (titleRect.getX() + 388, titleRect.getY() + 5, 56, 34);
-    stopTop.setBounds (titleRect.getX() + 448, titleRect.getY() + 5, 56, 34);
-    fxBtn.setBounds (titleRect.getX() + 512, titleRect.getY() + 5, 56, 34);
+    padSrcBtn.setBounds (titleRect.getX() + 150, titleRect.getY() + 8, 56, 28);
+    kitBox.setBounds (titleRect.getX() + 210, titleRect.getY() + 8, 150, 28);
+    padInstBox.setBounds (kitBox.getBounds());
+    playTop.setBounds (titleRect.getX() + 368, titleRect.getY() + 5, 52, 34);
+    stopTop.setBounds (titleRect.getX() + 424, titleRect.getY() + 5, 52, 34);
+    fxBtn.setBounds (titleRect.getX() + 484, titleRect.getY() + 5, 44, 34);
+    padsModeBtn.setBounds (titleRect.getX() + 540, titleRect.getY() + 5, 56, 34);
+    deckModeBtn.setBounds (titleRect.getX() + 600, titleRect.getY() + 5, 56, 34);
     fx.setBounds (r);                                                   // the master EQ/compressor window covers everything under the title
     bannerRect = { getWidth() / 2 - 300, 4, 600, 32 };
 
     auto main = r.removeFromTop (380);
+    turntable.setBounds (main);
     pads.setBounds (main.removeFromLeft (380));
     main.removeFromLeft (20);
     auto tabs = main.removeFromTop (28);
@@ -340,10 +379,10 @@ void BeatStationEditor::paint (juce::Graphics& g)
     g.fillAll (Theme::bg);
     g.setColour (Theme::dim);
     g.setFont (juce::Font (11.f, juce::Font::bold));
-    g.drawText ("BASEMENT INSTRUMENTS", titleRect.getX(), titleRect.getY() + 2, 220, 14, juce::Justification::centredLeft);
+    g.drawText ("BASEMENT INSTRUMENTS", titleRect.getX(), titleRect.getY() + 2, 148, 14, juce::Justification::centredLeft);
     g.setColour (Theme::amber);
     g.setFont (juce::Font (16.f, juce::Font::bold));
-    g.drawText ("BEAT STATION", titleRect.getX(), titleRect.getY() + 16, 220, 22, juce::Justification::centredLeft);
+    g.drawText ("BEAT STATION", titleRect.getX(), titleRect.getY() + 16, 148, 22, juce::Justification::centredLeft);
 
     {
         g.setColour (Theme::dim);
@@ -353,11 +392,11 @@ void BeatStationEditor::paint (juce::Graphics& g)
         if (lm != 0) last = ((lm >> 24) == 1 ? "CC " : "Note ") + juce::String ((lm >> 8) & 255) + " ch" + juce::String ((lm >> 16) & 255) + " = " + juce::String (lm & 255);
         const juce::String devices = isStandalone() ? (proc.midiNames.isEmpty() ? juce::String ("MIDI: none found") : "MIDI: " + proc.midiNames.joinIntoString (", "))
                                                     : juce::String ("MIDI from the host");
-        g.drawFittedText (devices, titleRect.getX() + 576, titleRect.getY() + 4, 104, 16, juce::Justification::centredLeft, 1);
-        g.drawFittedText ("last: " + last, titleRect.getX() + 576, titleRect.getY() + 22, 104, 16, juce::Justification::centredLeft, 1);
+        g.drawFittedText (devices, titleRect.getX() + 664, titleRect.getY() + 4, 126, 16, juce::Justification::centredLeft, 1);
+        g.drawFittedText ("last: " + last, titleRect.getX() + 664, titleRect.getY() + 22, 126, 16, juce::Justification::centredLeft, 1);
     }
 
-    if (rightMode == 0 && ! fxMode)
+    if (rightMode == 0 && ! fxMode && ! deckMode)
     {
         g.setColour (Theme::panel);
         g.fillRoundedRectangle (knobPanel.toFloat(), 8.f);

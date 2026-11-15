@@ -11,6 +11,8 @@ struct Sample
     juce::AudioBuffer<float> data;      // always stereo
     double sampleRate = 44100.0;
     juce::String name;
+    float trim = 1.f;                   // the INPUT volume it was loaded with (stays with the sound once it is in the machine)
+    bool internal = false;              // built-in kit sounds: these never show on the IN meter
 };
 
 struct PadInfo
@@ -60,10 +62,18 @@ public:
         preview.active = false;
         for (auto& s : synth) { s.active = false; s.filt.prepare ({ sr, (juce::uint32) juce::jmax (1, blockSize), 1u }); s.env.setSampleRate (sr); }
         inBus.setSize (2, juce::jmax (blockSize * 2, 8192));
+        micBus.setSize (2, juce::jmax (blockSize * 2, 8192));
+        recBuf.setSize (2, (int) (sr * 60.0) + 16);                    // room for 60 s of recording, made here so nothing allocates while recording
+        recLen = 0;
         masterFx.prepare (sr, blockSize);
     }
     void releaseResources() override {}
-    bool isBusesLayoutSupported (const BusesLayout& l) const override { return l.getMainOutputChannelSet() == juce::AudioChannelSet::stereo(); }
+    bool isBusesLayoutSupported (const BusesLayout& l) const override
+    {
+        const auto in = l.getMainInputChannelSet();                    // the input is optional: off, mono or stereo
+        return l.getMainOutputChannelSet() == juce::AudioChannelSet::stereo()
+            && (in.isDisabled() || in == juce::AudioChannelSet::mono() || in == juce::AudioChannelSet::stereo());
+    }
     void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
 
     juce::AudioProcessorEditor* createEditor() override;
@@ -82,7 +92,7 @@ public:
     void setStateInformation (const void*, int) override;
 
     // ---- Sampler API (message thread) ----
-    bool loadSample (int pad, const juce::File& file);
+    bool loadSample (int pad, const juce::File& file, float trim = -1.f);   // trim < 0 = use the INPUT volume knob as it is now
     void clearPad (int pad);                            // removes the sample from the pad
     void clearChops (int pad);                          // keeps the sample on one pad, plays it whole again, empties the pads that shared it
     PadInfo getPad (int pad) const;
@@ -92,6 +102,28 @@ public:
     void auditionWhole (int pad) { wholePad = pad; }    // plays the pad's entire sample, ignoring the chop
     EnvData getEnv (int pad, int which) const;          // which: 0 = amplitude, 1 = filter
     void setEnv (int pad, int which, const EnvData& e);
+
+    // ---- Input: the IN meter shows only what comes in from outside (browser auditions, the audio input, samples you loaded) ----
+    std::atomic<float> inputGain { 1.f };               // the INPUT volume knob under the IN meter
+    void startInputRecording() { recLen = 0; recArmed = true; }
+    void stopInputRecording() { recArmed = false; }
+    bool commitRecording (int pad);                     // call a moment after stopping: puts what was recorded on the pad (and saves a WAV)
+    std::atomic<bool> recArmed { false };
+    std::atomic<int> recLen { 0 };                      // frames recorded so far
+
+    // ---- What the keyboard and the pads play ----
+    std::atomic<bool> keysDrums { false };              // true = the keyboard plays the drum pads instead of an instrument
+    std::atomic<bool> padsInst { false };               // true = the pads play the chosen instrument instead of their samples
+
+    // ---- Turntable deck (single SL-style deck; plays through the same IN/OUT meters and master FX) ----
+    bool deckLoadPad (int pad);                         // loads the pad's whole sample; pads that share it become hot cues
+    bool deckLoadFile (const juce::File& file);
+    std::shared_ptr<const Sample> getDeckSample() const { const juce::SpinLock::ScopedLockType l (deckLock); return deckSample; }
+    double getDeckCue (int i) const { return deckCue[(size_t) i].load(); }          // frame position or -1
+    void setDeckCue (int i, double framePos) { deckCue[(size_t) i] = framePos; }
+    std::atomic<bool> deckMotor { false }, deck45 { false }, deckReverse { false }, deckTouch { false }, deckLoop { true };
+    std::atomic<float> deckPitch { 0.f }, deckTouchRate { 0.f }, deckCut { 1.f }, deckGain { 0.8f };   // pitch is a fraction (+0.08 = +8%)
+    std::atomic<double> deckPos { 0.0 }, deckSeek { -1.0 };                        // position in frames of the loaded sample
 
     // ---- Sample browser ----
     SampleLibrary library;
@@ -160,7 +192,8 @@ private:
         float gainL = 1.f, gainR = 1.f, relGain = 1.f, relStep = 0.f;
         int note = -1, group = 0, fType = -1;
         bool keys = false, gate = false, stopping = false, releasing = false, autoRelease = true, filtOn = false, fltEnvOn = true;
-        float stopGain = 1.f;
+        float stopGain = 1.f, trim = 1.f;
+        bool internal = false;
         EnvData ampEnv, fltEnv;
         juce::dsp::StateVariableTPTFilter<float> filt;
     };
@@ -181,6 +214,7 @@ private:
     void releaseVoice (Voice& v) { if (! v.releasing) { v.releasing = true; v.relStep = 1.f / (float) juce::jmax (1.0, v.relSamples); } }
     void render (juce::AudioBuffer<float>&, int from, int to);
     void renderPreview (juce::AudioBuffer<float>&);
+    void renderDeck (juce::AudioBuffer<float>&, int n);
     void renderSampler (juce::AudioBuffer<float>&, int from, int to);
     void renderSynth (juce::AudioBuffer<float>&, int from, int to);
     void startSynth (int note, float velocity, int patchIndex);
@@ -188,7 +222,7 @@ private:
     bool handleMapping (const juce::MidiMessage& msg);
     void applyLearn (bool isCC, int channel, int number);
     void recordHit (int pad, double stepPosition);
-    bool decodeInto (int pad, std::unique_ptr<juce::AudioFormatReader> reader, const juce::String& name, const juce::String& fileKey);
+    bool decodeInto (int pad, std::unique_ptr<juce::AudioFormatReader> reader, const juce::String& name, const juce::String& fileKey, float trim, bool internal);
     bool loadBuiltin (int pad, const juce::String& resourceName);
     void handleIncomingMidiMessage (juce::MidiInput*, const juce::MidiMessage& m) override { midiCollector.addMessageToQueue (m); }
 
@@ -200,6 +234,7 @@ private:
     juce::Random noiseRng;
     juce::AudioBuffer<float> inBus;                      // the pad sounds before the envelope and filter: what the IN meter shows
     float *inL = nullptr, *inR = nullptr;
+    juce::AudioBuffer<float> micBus, recBuf;             // the audio input for this block, and the recording
     juce::RangedAudioParameter* padParams[numPads][numPadParams] {};
     std::atomic<float>* raw[numPads][numPadParams] {};   // indexed by PadParam
     std::atomic<float> *pKeys = nullptr, *pKeysInst = nullptr;
@@ -220,6 +255,13 @@ private:
     std::shared_ptr<const Sample> pendingPreview;
     std::atomic<bool> previewReady { false }, previewStop { false };
     std::atomic<int> previewToken { 0 };
+
+    mutable juce::SpinLock deckLock;
+    std::shared_ptr<const Sample> deckSample, dSample;
+    std::array<std::atomic<double>, 8> deckCue;
+    std::atomic<bool> deckDirty { false };
+    double dPos = 0.0;
+    float dRate = 0.f, dCutNow = 1.f;
 
     juce::MidiMessageCollector midiCollector;
     std::vector<std::unique_ptr<juce::MidiInput>> midiInputs;

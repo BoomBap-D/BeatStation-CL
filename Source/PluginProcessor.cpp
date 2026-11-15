@@ -10,7 +10,8 @@ static juce::dsp::StateVariableTPTFilterType typeFor (int ft)
 }
 
 BeatStationProcessor::BeatStationProcessor()
-    : AudioProcessor (BusesProperties().withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
+    : AudioProcessor (BusesProperties().withInput ("Input", juce::AudioChannelSet::stereo(), true)
+                                        .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
       apvts (*this, nullptr, "STATE", createLayout())
 {
     formats.registerBasicFormats();
@@ -30,6 +31,7 @@ BeatStationProcessor::BeatStationProcessor()
         padNote[(size_t) p] = firstNote + p;
         slots[(size_t) p].fltEnv.p[1] = { 400.f, 0.f };                                       // filter envelope starts as a falling curve
     }
+    for (auto& cue : deckCue) cue = -1.0;
     pKeys = apvts.getRawParameterValue (ParamID::keysMode);
     pKeysInst = apvts.getRawParameterValue (ParamID::keysInst);
     pBpm = apvts.getRawParameterValue (ParamID::bpm);
@@ -78,7 +80,7 @@ void BeatStationProcessor::assign (int pad, std::shared_ptr<const Sample> s, con
     slot.end = end;
 }
 
-bool BeatStationProcessor::decodeInto (int pad, std::unique_ptr<juce::AudioFormatReader> reader, const juce::String& name, const juce::String& fileKey)
+bool BeatStationProcessor::decodeInto (int pad, std::unique_ptr<juce::AudioFormatReader> reader, const juce::String& name, const juce::String& fileKey, float trim, bool internal)
 {
     if (reader == nullptr || reader->lengthInSamples <= 0) return false;
     const int len = (int) std::min (reader->lengthInSamples, (juce::int64) (reader->sampleRate * 60.0));   // cap at 60 s
@@ -88,14 +90,16 @@ bool BeatStationProcessor::decodeInto (int pad, std::unique_ptr<juce::AudioForma
     if (reader->numChannels == 1) s->data.copyFrom (1, 0, s->data, 0, 0, len);
     s->sampleRate = reader->sampleRate;
     s->name = name;
+    s->trim = trim;
+    s->internal = internal;
     assign (pad, s, fileKey, 0.f, 1.f);
     return true;
 }
 
-bool BeatStationProcessor::loadSample (int pad, const juce::File& file)
+bool BeatStationProcessor::loadSample (int pad, const juce::File& file, float trim)
 {
     return decodeInto (pad, std::unique_ptr<juce::AudioFormatReader> (formats.createReaderFor (file)),
-                       file.getFileNameWithoutExtension(), file.getFullPathName());
+                       file.getFileNameWithoutExtension(), file.getFullPathName(), trim < 0.f ? inputGain.load() : trim, false);
 }
 
 // Resource file names look like "trap_01_Kick.wav": kit, pad number, sound name (hyphen = space).
@@ -119,7 +123,7 @@ bool BeatStationProcessor::loadBuiltin (int pad, const juce::String& resourceNam
     int index = 0;
     if (data == nullptr || ! parseKitResource (resourceName.toRawUTF8(), kit, index, sound)) return false;
     return decodeInto (pad, std::unique_ptr<juce::AudioFormatReader> (formats.createReaderFor (std::make_unique<juce::MemoryInputStream> (data, (size_t) size, false))),
-                       sound, "builtin:" + resourceName);
+                       sound, "builtin:" + resourceName, 1.f, true);
 }
 
 juce::StringArray BeatStationProcessor::getKitKeys()
@@ -285,14 +289,16 @@ void BeatStationProcessor::renderPreview (juce::AudioBuffer<float>& buffer)
     const float* d0 = preview.s->data.getReadPointer (0);
     const float* d1 = preview.s->data.getReadPointer (1);
     const double len = (double) preview.s->data.getNumSamples();
-    const float g = previewGain.load();
+    const float g = previewGain.load() * inputGain.load();            // a browser audition is a sound coming in: the INPUT volume sets its level
     for (int i = 0; i < buffer.getNumSamples(); ++i)
     {
         if (preview.pos >= len - 1.0) { preview.active = false; break; }
         const int idx = (int) preview.pos;
         const float fr = (float) (preview.pos - (double) idx);
-        L[i] += (d0[idx] + (d0[idx + 1] - d0[idx]) * fr) * g;
-        if (R != nullptr) R[i] += (d1[idx] + (d1[idx + 1] - d1[idx]) * fr) * g;
+        const float pl = (d0[idx] + (d0[idx + 1] - d0[idx]) * fr) * g, pr = (d1[idx] + (d1[idx + 1] - d1[idx]) * fr) * g;
+        if (inL != nullptr) { inL[i] += pl; inR[i] += pr; }           // nothing changes it on the way through, so IN and OUT match
+        L[i] += pl;
+        if (R != nullptr) R[i] += pr;
         preview.pos += preview.ratio;
     }
 }
@@ -436,6 +442,7 @@ void BeatStationProcessor::startVoice (int pad, float velocity, int note, bool k
     const float angle = (pan + 1.f) * juce::MathConstants<float>::pi * 0.25f;
 
     v->active = true;  v->pad = pad;  v->age = 0;  v->s = smp;
+    v->trim = smp->trim;  v->internal = smp->internal;
     v->note = note;    v->keys = keys; v->gate = (mode == 2) && ! noGate && ! whole; v->group = group;
     v->stopping = false; v->stopGain = 1.f; v->releasing = false; v->relGain = 1.f; v->relStep = 0.f;
     v->autoRelease = ! v->gate;                                       // one-shots fade themselves out as the chop ends
@@ -483,9 +490,11 @@ void BeatStationProcessor::renderSampler (juce::AudioBuffer<float>& buffer, int 
 
             const int idx = (int) v.pos;
             const float fr = (float) (v.pos - (double) idx);
-            float l = d0[idx] + (d0[idx + 1] - d0[idx]) * fr;
-            float r = d1[idx] + (d1[idx + 1] - d1[idx]) * fr;
-            if (inL != nullptr) { inL[i] += l * v.gainL; inR[i] += r * v.gainR; }     // IN meter: the sound before the envelope and filter
+            float l = (d0[idx] + (d0[idx + 1] - d0[idx]) * fr) * v.trim;
+            float r = (d1[idx] + (d1[idx + 1] - d1[idx]) * fr) * v.trim;
+            // IN meter: a sample that came in from outside shows at the level it came in at, whatever the pad's level, pan, envelope or filter do.
+            // Built-in kit sounds are internal, so they only show on OUT.
+            if (inL != nullptr && ! v.internal) { inL[i] += l; inR[i] += r; }
 
             if ((v.age & 15) == 0)                                    // every 16 samples: read the filter knobs live, so turning them is heard at once
             {
@@ -638,6 +647,155 @@ void BeatStationProcessor::render (juce::AudioBuffer<float>& buffer, int from, i
     renderSynth (buffer, from, to);
 }
 
+// ---------------------------------------------------------------- recording from the audio input
+bool BeatStationProcessor::commitRecording (int pad)
+{
+    const int len = juce::jmin (recLen.load(), recBuf.getNumSamples());
+    if (recArmed.load() || len < (int) (sampleRate * 0.05) || pad < 0 || pad >= numPads) return false;
+
+    auto s = std::make_shared<Sample>();
+    s->data.setSize (2, len);
+    s->data.copyFrom (0, 0, recBuf, 0, 0, len);
+    s->data.copyFrom (1, 0, recBuf, 1, 0, len);
+    s->sampleRate = sampleRate;
+    s->name = "Rec " + juce::Time::getCurrentTime().formatted ("%H.%M.%S");
+
+    // saved as a WAV so the project can find it again
+    const auto dir = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
+                         .getChildFile ("Basement Instruments").getChildFile ("Beat Station").getChildFile ("Recordings");
+    dir.createDirectory();
+    const auto file = dir.getChildFile ("Rec-" + juce::Time::getCurrentTime().formatted ("%Y%m%d-%H%M%S") + ".wav");
+    juce::String key = "rec:" + s->name;
+    if (auto out = std::unique_ptr<juce::FileOutputStream> (file.createOutputStream()))
+    {
+        juce::WavAudioFormat wav;
+        if (auto* raw = wav.createWriterFor (out.get(), sampleRate, 2, 24, {}, 0))
+        {
+            out.release();                                            // the writer owns the stream now
+            std::unique_ptr<juce::AudioFormatWriter> writer (raw);
+            if (writer->writeFromAudioSampleBuffer (s->data, 0, len)) key = file.getFullPathName();
+        }
+    }
+    assign (pad, s, key, 0.f, 1.f);
+    recLen = 0;
+    return true;
+}
+
+// ---------------------------------------------------------------- turntable deck
+bool BeatStationProcessor::deckLoadPad (int pad)
+{
+    const auto info = getPad (pad);
+    if (info.sample == nullptr) return false;
+    {
+        const juce::SpinLock::ScopedLockType l (deckLock);
+        deckSample = info.sample;
+    }
+    for (auto& c : deckCue) c = -1.0;
+    int k = 0;
+    const double len = (double) info.sample->data.getNumSamples();
+    for (int p = 0; p < numPads && k < 8; ++p)                       // pads that share this sample: their chop starts become hot cues
+    {
+        const auto o = getPad (p);
+        if (o.sample == info.sample) deckCue[(size_t) k++] = (double) o.start * len;
+    }
+    if (k == 0) deckCue[0] = 0.0;
+    deckSeek = 0.0;
+    deckDirty = true;
+    return true;
+}
+
+bool BeatStationProcessor::deckLoadFile (const juce::File& file)
+{
+    std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (file));
+    if (reader == nullptr || reader->lengthInSamples <= 0) return false;
+    const int len = (int) std::min (reader->lengthInSamples, (juce::int64) (reader->sampleRate * 60.0));
+    auto s = std::make_shared<Sample>();
+    s->data.setSize (2, len);
+    reader->read (&s->data, 0, len, 0, true, true);
+    if (reader->numChannels == 1) s->data.copyFrom (1, 0, s->data, 0, 0, len);
+    s->sampleRate = reader->sampleRate;
+    s->name = file.getFileNameWithoutExtension();
+    s->trim = inputGain.load();
+    {
+        const juce::SpinLock::ScopedLockType l (deckLock);
+        deckSample = s;
+    }
+    for (auto& c : deckCue) c = -1.0;
+    deckCue[0] = 0.0;
+    deckSeek = 0.0;
+    deckDirty = true;
+    return true;
+}
+
+// One revolution = 1.8 s of audio at 33 1/3 rpm. 45 rpm plays 1.35x faster. The rate follows the motor (spin-up / brake) or the hand.
+void BeatStationProcessor::renderDeck (juce::AudioBuffer<float>& buffer, int n)
+{
+    if (deckDirty.exchange (false))
+    {
+        const juce::SpinLock::ScopedTryLockType l (deckLock);
+        if (l.isLocked()) { dSample = deckSample; dPos = 0.0; }
+        else deckDirty = true;
+    }
+    if (dSample == nullptr) { deckPos = 0.0; return; }
+
+    const double seek = deckSeek.exchange (-1.0);
+    const double len = (double) dSample->data.getNumSamples();
+    if (seek >= 0.0) dPos = juce::jlimit (0.0, len - 1.0, seek);
+
+    const bool touching = deckTouch.load();
+    const float pitch = deckPitch.load();
+    float target;
+    if (touching) target = deckTouchRate.load();
+    else
+    {
+        target = deck45.load() ? 1.35f : 1.f;
+        target *= 1.f + pitch;
+        if (deckReverse.load()) target = -target;
+        if (! deckMotor.load()) target = 0.f;
+    }
+    const float tc = touching ? 0.004f : (target == 0.f ? 0.35f : 0.25f);
+    const float alpha = 1.f - std::exp (-1.f / (tc * (float) sampleRate));
+    const float cutAlpha = 1.f - std::exp (-1.f / (0.0015f * (float) sampleRate));
+    const float cutTarget = deckCut.load();
+    const float gain = deckGain.load();
+    const double srRatio = dSample->sampleRate / sampleRate;
+
+    float* L = buffer.getWritePointer (0);
+    float* R = buffer.getNumChannels() > 1 ? buffer.getWritePointer (1) : nullptr;
+    const float* d0 = dSample->data.getReadPointer (0);
+    const float* d1 = dSample->data.getReadPointer (1);
+    const int total = dSample->data.getNumSamples();
+    const float dTrim = dSample->trim;
+    const bool dInternal = dSample->internal;
+
+    auto hermite = [] (float y0, float y1, float y2, float y3, float t)
+    {
+        const float c1 = 0.5f * (y2 - y0), c2 = y0 - 2.5f * y1 + 2.f * y2 - 0.5f * y3, c3 = 0.5f * (y3 - y0) + 1.5f * (y1 - y2);
+        return ((c3 * t + c2) * t + c1) * t + y1;
+    };
+
+    for (int i = 0; i < n; ++i)
+    {
+        dRate += (target - dRate) * alpha;
+        dCutNow += (cutTarget - dCutNow) * cutAlpha;
+        dPos += (double) dRate * srRatio;
+        if (dPos >= len || dPos < 0.0)
+        {
+            if (deckLoop.load()) { dPos = std::fmod (dPos, len); if (dPos < 0.0) dPos += len; }
+            else { dPos = juce::jlimit (0.0, len - 1.0, dPos); continue; }
+        }
+        const int idx = (int) dPos;
+        const float fr = (float) (dPos - (double) idx);
+        const int i0 = juce::jmax (0, idx - 1), i2 = juce::jmin (total - 1, idx + 1), i3 = juce::jmin (total - 1, idx + 2);
+        const float sl = hermite (d0[i0], d0[idx], d0[i2], d0[i3], fr) * dTrim;
+        const float sr = hermite (d1[i0], d1[idx], d1[i2], d1[i3], fr) * dTrim;
+        if (inL != nullptr && ! dInternal) { inL[i] += sl; inR[i] += sr; }
+        L[i] += sl * dCutNow * gain;
+        if (R != nullptr) R[i] += sr * dCutNow * gain;
+    }
+    deckPos = dPos;
+}
+
 void BeatStationProcessor::recordHit (int pad, double stepPosition)
 {
     const int len = getPatternLength();
@@ -652,9 +810,31 @@ void BeatStationProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
     const int n = buffer.getNumSamples();
 
     auto raise = [] (std::atomic<float>& a, float v) { float c = a.load(); while (v > c && ! a.compare_exchange_weak (c, v)) {} };
+    // ---- audio input (microphone / line in): kept aside before the output is cleared
+    const int inCh = juce::jmin (getTotalNumInputChannels(), buffer.getNumChannels());
+    const bool haveMic = inCh > 0 && micBus.getNumSamples() >= n;
+    if (haveMic)
+    {
+        const float ig = inputGain.load();
+        micBus.copyFrom (0, 0, buffer, 0, 0, n);
+        micBus.copyFrom (1, 0, buffer, juce::jmin (1, inCh - 1), 0, n);
+        micBus.applyGain (0, n, ig);
+    }
     buffer.clear();
-    inL = inR = nullptr;                                              // the IN meter collects the pad sounds before envelope and filter
+    inL = inR = nullptr;                                              // the IN meter collects only what comes in from outside
     if (inBus.getNumSamples() >= n) { inBus.clear (0, n); inL = inBus.getWritePointer (0); inR = inBus.getWritePointer (1); }
+    if (recArmed.load() && haveMic)                                   // REC: the input shows on the IN meter and is written to the recording
+    {
+        if (inL != nullptr) { inBus.addFrom (0, 0, micBus, 0, 0, n); inBus.addFrom (1, 0, micBus, 1, 0, n); }
+        const int at = recLen.load(), room = recBuf.getNumSamples() - at, take = juce::jmin (n, room);
+        if (take > 0)
+        {
+            recBuf.copyFrom (0, at, micBus, 0, 0, take);
+            recBuf.copyFrom (1, at, micBus, 1, 0, take);
+            recLen = at + take;
+        }
+        if (take < n) recArmed = false;                               // full (60 s): stops itself
+    }
 
     midiCollector.removeNextBlockOfMessages (midi, n);                // hardware MIDI keyboards (standalone)
     keyboardState.processNextMidiBuffer (midi, 0, n, true);           // pads and keys clicked on screen
@@ -742,9 +922,13 @@ void BeatStationProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
 
         const int note = msg.getNoteNumber(), ch = msg.getChannel();
         const bool seqNote = (ch == 16);
-        const bool keysTrigger = keysMode && ch != 10 && ! seqNote;   // channel 10 and the sequencer always play the pads
+        const bool keysOn = keysMode && ch != 10 && ! seqNote;        // channel 10 and the sequencer always play the pads
+        const bool keysAsDrums = keysOn && keysDrums.load();          // DRUM SET: every key plays a pad (16 pads repeat up the keyboard)
+        const bool keysTrigger = keysOn && ! keysAsDrums;
         int pad = -1;
-        for (int i = 0; i < numPads; ++i) if (padNote[(size_t) i] == note) { pad = i; break; }
+        if (keysAsDrums) pad = (((note - 36) % numPads) + numPads) % numPads;
+        else for (int i = 0; i < numPads; ++i) if (padNote[(size_t) i] == note) { pad = i; break; }
+        const bool padAsInst = pad >= 0 && ! keysTrigger && ! keysAsDrums && padsInst.load();   // INSTRUMENT on the pads: 16 notes from C3
 
         if (msg.isNoteOn())
         {
@@ -752,6 +936,8 @@ void BeatStationProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
                 startSynth (note, msg.getFloatVelocity(), inst - 1);
             else if (keysTrigger)
                 startVoice (selectedPad.load(), msg.getFloatVelocity(), note, true, (float) (note - 60), false);
+            else if (padAsInst)
+                startSynth (48 + pad, msg.getFloatVelocity(), juce::jmax (0, inst - 1));
             else if (pad >= 0)
             {
                 startVoice (pad, msg.getFloatVelocity(), note, false, 0.f, seqNote);
@@ -762,12 +948,14 @@ void BeatStationProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
         else if (msg.isNoteOff())
         {
             if (keysTrigger && inst > 0) releaseSynth (note);
+            if (padAsInst) releaseSynth (48 + pad);
             for (auto& v : voices)                                    // Gate mode pads fade out when the key is let go
                 if (v.active && v.gate && ! v.stopping && v.note == note && v.keys == keysTrigger) releaseVoice (v);
         }
     }
     render (buffer, pos, n);
     renderPreview (buffer);
+    renderDeck (buffer, n);
     if (inL != nullptr)
     {
         const float l = inBus.getMagnitude (0, 0, n), r = inBus.getMagnitude (1, 0, n);
@@ -827,6 +1015,7 @@ void BeatStationProcessor::getStateInformation (juce::MemoryBlock& dest)
             p.setProperty ("file", info.file, nullptr);
             p.setProperty ("start", info.start, nullptr);
             p.setProperty ("end", info.end, nullptr);
+            if (info.sample != nullptr) p.setProperty ("trim", info.sample->trim, nullptr);
             pads.appendChild (p, nullptr);
         }
         juce::ValueTree e ("ENV");
@@ -837,6 +1026,10 @@ void BeatStationProcessor::getStateInformation (juce::MemoryBlock& dest)
     }
     state.appendChild (pads, nullptr);
     state.appendChild (envs, nullptr);
+
+    state.setProperty ("inGain", inputGain.load(), nullptr);
+    state.setProperty ("keysDrums", keysDrums.load(), nullptr);
+    state.setProperty ("padsInst", padsInst.load(), nullptr);
 
     juce::String bits;
     for (auto& s : steps) bits += s.load() ? "1" : "0";
@@ -874,6 +1067,9 @@ void BeatStationProcessor::setStateInformation (const void* data, int size)
     auto xml = getXmlFromBinary (data, size);
     if (xml == nullptr || ! xml->hasTagName (apvts.state.getType())) return;
     apvts.replaceState (juce::ValueTree::fromXml (*xml));
+    inputGain = (float) apvts.state.getProperty ("inGain", 1.0f);
+    keysDrums = (bool) apvts.state.getProperty ("keysDrums", false);
+    padsInst = (bool) apvts.state.getProperty ("padsInst", false);
 
     const auto padsTree = apvts.state.getChildWithName ("PADS");
     if (padsTree.isValid())
@@ -888,7 +1084,7 @@ void BeatStationProcessor::setStateInformation (const void* data, int size)
             if (cache.find (path) == cache.end())
             {
                 const bool ok = path.startsWith ("builtin:") ? loadBuiltin (i, path.fromFirstOccurrenceOf (":", false, false))
-                                                             : loadSample (i, juce::File (path));
+                                                             : loadSample (i, juce::File (path), p.hasProperty ("trim") ? (float) p["trim"] : 1.f);
                 if (! ok) continue;                                   // file moved or missing: pad stays empty
                 cache[path] = getPad (i).sample;
             }

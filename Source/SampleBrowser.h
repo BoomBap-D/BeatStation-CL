@@ -26,7 +26,7 @@ public:
         list.setOutlineThickness (1);
 
         autoPlay.setToggleState (true, juce::dontSendNotification);
-        advance.setToggleState (true, juce::dontSendNotification);
+        advance.setToggleState (false, juce::dontSendNotification);     // off to start: loading stays on the pad you chose
         for (auto* t : { &autoPlay, &advance })
         {
             t->setColour (juce::ToggleButton::textColourId, Theme::text);
@@ -40,18 +40,20 @@ public:
         volume.setColour (juce::Slider::trackColourId, Theme::amber.withAlpha (0.5f));
         volume.setColour (juce::Slider::thumbColourId, Theme::amber);
         volume.onValueChange = [this] { proc.previewGain = (float) volume.getValue(); };
+        proc.previewGain = 1.f;                                        // the INPUT volume knob under the IN meter sets the audition level now
         status.setColour (juce::Label::textColourId, Theme::dim);
         status.setFont (12.f);
 
         backBtn.onClick = [this] { if (histPos > 0) { --histPos; showDir (history[(size_t) histPos]); } };
         fwdBtn.onClick = [this] { if (histPos + 1 < (int) history.size()) { ++histPos; showDir (history[(size_t) histPos]); } };
         upBtn.onClick = [this] { goUp(); };
+        homeBtn.onClick = [this] { goTo (juce::File()); };              // straight back to the list of your main folders
         favBtn.onClick = [this] { showFavoritesMenu(); };
         foldersBtn.onClick = [this] { showFolderMenu(); };
         stopBtn.onClick = [this] { proc.stopPreview(); };
         loadBtn.onClick = [this] { loadRow (list.getSelectedRow()); };
 
-        for (auto* c : std::initializer_list<juce::Component*> { &backBtn, &fwdBtn, &upBtn, &favBtn, &foldersBtn, &search, &stopBtn, &autoPlay, &advance, &volume, &list, &status, &loadBtn })
+        for (auto* c : std::initializer_list<juce::Component*> { &backBtn, &fwdBtn, &upBtn, &homeBtn, &favBtn, &foldersBtn, &search, &stopBtn, &autoPlay, &advance, &list, &status, &loadBtn })
             addAndMakeVisible (*c);
         history.push_back (juce::File());
         histPos = 0;
@@ -69,9 +71,10 @@ public:
     {
         auto r = getLocalBounds();
         auto row1 = r.removeFromTop (28);
-        backBtn.setBounds (row1.removeFromLeft (30));    row1.removeFromLeft (3);
-        fwdBtn.setBounds (row1.removeFromLeft (30));     row1.removeFromLeft (3);
-        upBtn.setBounds (row1.removeFromLeft (40));      row1.removeFromLeft (6);
+        backBtn.setBounds (row1.removeFromLeft (62));    row1.removeFromLeft (3);
+        fwdBtn.setBounds (row1.removeFromLeft (28));     row1.removeFromLeft (3);
+        upBtn.setBounds (row1.removeFromLeft (40));      row1.removeFromLeft (3);
+        homeBtn.setBounds (row1.removeFromLeft (52));    row1.removeFromLeft (6);
         foldersBtn.setBounds (row1.removeFromRight (82)); row1.removeFromRight (4);
         favBtn.setBounds (row1.removeFromRight (84));    row1.removeFromRight (6);
         pathArea = row1;
@@ -210,7 +213,12 @@ private:
         else if (! entry.isDir && row == lastPreviewed) previewRow (row);      // clicking the selected sound again plays it again
     }
 
-    void listBoxItemDoubleClicked (int row, const juce::MouseEvent&) override { activateRow (row); }
+    // Double-click opens a folder. It does NOT load a sound, so clicking a sound over and over only auditions it.
+    // To load: the Load button, Enter, right-click, Shift+click, or drag it onto a pad.
+    void listBoxItemDoubleClicked (int row, const juce::MouseEvent&) override
+    {
+        if (juce::isPositiveAndBelow (row, entries.size()) && entries[row].isDir) goTo (entries[row].file);
+    }
     void returnKeyPressed (int row) override { activateRow (row); }
 
     juce::var getDragSourceDescription (const juce::SparseSet<int>& rows) override
@@ -354,7 +362,7 @@ private:
     std::vector<juce::File> history;
     juce::File currentDir, pendingSelect;
     juce::Rectangle<int> pathArea;
-    juce::TextButton backBtn { "<" }, fwdBtn { ">" }, upBtn { "Up" }, favBtn { "Favorites" }, foldersBtn { "Folders..." }, stopBtn { "Stop" }, loadBtn { "Load to Pad 1" };
+    juce::TextButton backBtn { "< Back" }, fwdBtn { ">" }, upBtn { "Up" }, homeBtn { "Home" }, favBtn { "Favorites" }, foldersBtn { "Folders..." }, stopBtn { "Stop" }, loadBtn { "Load to Pad 1" };
     juce::ToggleButton autoPlay { "Auto-play" }, advance { "Next pad after load" };
     juce::Slider volume;
     juce::Label status;

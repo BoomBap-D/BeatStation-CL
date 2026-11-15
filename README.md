@@ -106,3 +106,50 @@ Status: written as a starting point, not yet compiled or tested. Expect small fi
 - Right-click a pad: **Load sound...** (next to MIDI Learn).
 - Right-click a sound in the browser: **Load to the selected pad** and **Load to pad...** (pick any of the 16).
 - Nothing else changed from phase 5.
+
+## Phase 6 - the turntable (DECK)
+
+New **DECK** button in the title bar (next to PADS). DECK swaps the pad bank for a single turntable. The sequencer, keys, shape drawer and master FX stay where they are.
+The deck is an original Basement Instruments design (charcoal and amber) with the functions of a classic direct-drive deck. It is not a copy of any real product's look.
+
+- **Platter**: grab it with the mouse and move it in a circle to scratch. One revolution is 1.8 s of audio at 33. Hold it still and the sound stops, let go and it spins back up to speed.
+- **START / STOP**: motor with a short spin-up and a short brake. **33 / 45**, **REVERSE**, **LOOP** (on by default, off = plays once and goes silent at the end).
+- **Pitch fader**: top is minus, bottom is plus (like a real deck). Double-click to reset to zero. The range button cycles +/-8, 16, 50 percent. The ticks light up from the centre to the fader.
+- **Loading**: "Load pad N" puts the selected pad's WHOLE sample on the record, even if it is chopped. "Load..." opens any audio file. You can also drag a sample from the browser, or a pad's waveform, onto the deck.
+- **Hot cues**: when a record comes from a pad, the chop starts of every pad that shares that sample become cues 1-8. Click a cue to jump there (the motor starts if it was stopped). An empty cue sets itself to the current position when clicked. Right-click a cue to set or clear it.
+- **Waveform strip**: click or drag to jump. Cue flags are drawn on it.
+- **CUT FADER** and **HOLD CUT**: the deck's output gain with ~1.5 ms smoothing, for chops and transforms.
+- The deck goes through the same IN meter, master EQ/compressor and OUT meter as everything else.
+
+Not in this phase (next): saving the deck state in the project file, scratch recorder, second deck and DJ mixer, key lock, sync.
+
+Also fixed: SeqPanel used `Slider::TextBoxInside`, which does not exist in JUCE 8. It is now `TextBoxLeft` (bar sliders draw their text inside anyway).
+
+## Phase 7 - input rules, record button, instrument / drum switches, browser fixes
+
+**IN and OUT meters**
+- IN shows only sound that comes in from outside: a browser audition, the audio input while REC is on, and samples you loaded (at the level they came in at).
+- Turning a pad's level, pan, envelope or filter changes OUT only. IN stays where it was.
+- Internal sounds show on OUT only: the built-in drum kits and the Keys instruments.
+- A browser audition passes straight through, so IN and OUT match.
+
+**INPUT volume knob (VOL, under the IN meter)**
+- Sets the level of what comes in. Turn it down while auditioning a loud sample and both meters drop.
+- When you load a sample, the knob's level at that moment stays with that sound. Double-click the knob for 0 dB.
+- The browser's own volume slider is gone: this knob replaces it.
+
+**REC button (bottom of the IN meter)**
+- Blends in when off, glossy red when on. Click to start, click again to stop. The recording (up to 60 s) lands on the selected pad and is saved as a WAV in your user data folder under Basement Instruments/Beat Station/Recordings.
+- Standalone: JUCE mutes the audio input by default. Open Options > Audio/MIDI Settings, choose your input and untick "Mute audio input". The input is not played back through the speakers while recording, so there is no feedback.
+- The plugin now has an optional stereo input, so in a DAW you can route audio into it.
+
+**INSTRUMENT / DRUM SET on the keyboard**
+- Click the word INSTRUMENT (left of the dropdown in KEYS). It changes to DRUM SET, the dropdown lists the drum kits, and every key plays a pad (the 16 pads repeat up the keyboard).
+
+**KITS / INSTR on the pads**
+- The button left of the kit dropdown at the top. KITS = pads play their samples. INSTR = the dropdown lists the instruments and the 16 pads play that instrument as 16 notes going up from C3. The sequencer follows the same switch.
+
+**Browser**
+- "< Back" (where you just were), "Up" (one folder up) and a new "Home" (your main folders).
+- Clicking a sound only auditions it, however fast you click. Double-click opens folders and no longer loads sounds. To load: the Load button, Enter, right-click, Shift+click, or drag onto a pad.
+- "Next pad after load" now starts switched off.

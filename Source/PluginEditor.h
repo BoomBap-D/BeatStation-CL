@@ -10,6 +10,7 @@
 #include "KeyboardPanel.h"
 #include "Meters.h"
 #include "SampleBrowser.h"
+#include "TurntablePanel.h"
 
 class BeatStationEditor : public juce::AudioProcessorEditor, public juce::DragAndDropContainer, private juce::Timer
 {
@@ -44,19 +45,23 @@ private:
     ShapePanel shape;
     KeyboardPanel keyboard;
     FxPanel fx;
+    TurntablePanel turntable;
 
     juce::TextButton loadBtn { "Load..." }, clearBtn { "Clear Pad" }, clearChopsBtn { "Clear Chops" }, fullBtn { "Play Full" },
                      modeBtn { "Mode: Cut" }, keysBtn { "Keys" },
                      chop4 { "Chop 4" }, chop8 { "Chop 8" }, chop16 { "Chop 16" }, chopHits { "Chop at hits" },
-                     stopBtn { "STOP" }, midiBtn { "MIDI" }, fxBtn { "FX" }, fileBtn { "File" }, playTop { "Play" }, stopTop { "Stop" },
+                     stopBtn { "STOP" }, midiBtn { "MIDI" }, fxBtn { "FX" }, padsModeBtn { "PADS" }, padSrcBtn { "KITS" }, deckModeBtn { "DECK" }, fileBtn { "File" }, playTop { "Play" }, stopTop { "Stop" },
                      editTab { "EDIT" }, browseTab { "BROWSE" }, keysTab { "KEYS" }, seqTab { "STEP SEQ" }, shapeTab { "SHAPE" };
     LabeledKnob level { "LEVEL", " dB", Theme::amber }, pan { "PAN", "", Theme::green }, tune { "TUNE", " st", Theme::amber },
                 choke { "CHOKE", "", Theme::amber };
-    juce::ComboBox kitBox;
+    juce::ComboBox kitBox, padInstBox;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> padInstAtt;
+    int shownPadsInst = -1;
+    void syncPadSource();
     juce::StringArray kitKeys;
     std::unique_ptr<juce::FileChooser> chooser;
     int selPad = 0, drawer = 1, rightMode = 0, lastMapVersion = -1;   // drawer: 0 keys, 1 step seq, 2 shape.  rightMode: 0 edit, 1 browse
-    bool wasLearning = false, fxMode = false;
+    bool wasLearning = false, fxMode = false, deckMode = false;
     int lastMidiSeen = 0;
     juce::String bpmText;
     juce::Rectangle<int> knobPanel, titleRect, bannerRect;

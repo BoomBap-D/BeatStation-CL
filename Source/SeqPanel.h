@@ -165,7 +165,7 @@ public:
 
     explicit SequencerPanel (BeatStationProcessor& p)
         : proc (p), grid (p),
-          bpm (juce::Slider::LinearBar, juce::Slider::NoTextBox), swing (juce::Slider::LinearBar, juce::Slider::NoTextBox)
+          bpm (juce::Slider::LinearBar, juce::Slider::TextBoxLeft), swing (juce::Slider::LinearBar, juce::Slider::TextBoxLeft)
     {
         for (auto* c : std::initializer_list<juce::Component*> { &playBtn, &stopBtn, &recBtn, &clearBtn, &lenBtn, &pageBtn, &bpm, &swing, &grid })
             addAndMakeVisible (*c);

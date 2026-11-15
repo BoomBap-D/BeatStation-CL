@@ -10,6 +10,18 @@ public:
     MeterStrip (BeatStationProcessor& p, int sideIndex, juce::String label) : proc (p), side (sideIndex), name (std::move (label))
     {
         level[0] = level[1] = hold[0] = hold[1] = -100.f;
+        if (side == 0)                                                 // the IN meter carries the INPUT volume knob and the record button
+        {
+            vol.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
+            vol.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
+            vol.setRotaryParameters (juce::MathConstants<float>::pi * 1.25f, juce::MathConstants<float>::pi * 2.75f, true);
+            vol.setRange (-30.0, 12.0, 0.1);
+            vol.setDoubleClickReturnValue (true, 0.0);
+            vol.setValue (0.0, juce::dontSendNotification);
+            vol.setColour (juce::Slider::rotarySliderFillColourId, Theme::amber);
+            vol.onValueChange = [this] { proc.inputGain = juce::Decibels::decibelsToGain ((float) vol.getValue()); repaint(); };
+            addAndMakeVisible (vol);
+        }
         startTimerHz (30);
     }
 
@@ -29,7 +41,7 @@ public:
         g.setFont (juce::Font (9.f, juce::Font::bold));
         g.drawText ("CLIP", clipRect, juce::Justification::centred);
 
-        const int top = 48, bottom = getHeight() - 10, segs = 40, barW = 14, gap = 4;
+        const int top = 48, bottom = getHeight() - footer, segs = 40, barW = 14, gap = 4;
         const float segH = (float) (bottom - top) / (float) segs;
         const int x0 = (getWidth() - 2 * barW - gap) / 2;
         for (int ch = 0; ch < 2; ++ch)
@@ -52,15 +64,85 @@ public:
         }
     }
 
+    void paintOverChildren (juce::Graphics& g) override
+    {
+        if (side != 0) return;
+        g.setColour (Theme::dim);
+        g.setFont (juce::Font (9.f, juce::Font::bold));
+        g.drawText ("VOL", 0, getHeight() - footer + 6, getWidth(), 10, juce::Justification::centred);
+        g.setColour (Theme::text);
+        const float db = (float) vol.getValue();
+        g.drawText ((db > 0.f ? "+" : "") + juce::String (db, 1), 0, recRect.getY() - 14, getWidth(), 10, juce::Justification::centred);
+
+        // record button: blends in when off, glossy red when recording
+        const auto r = recRect.toFloat();
+        if (recOn)
+        {
+            g.setGradientFill (juce::ColourGradient (juce::Colour (0xffff5a4d), r.getCentreX(), r.getY(), juce::Colour (0xffa30f14), r.getCentreX(), r.getBottom(), false));
+            g.fillRoundedRectangle (r, 6.f);
+            g.setColour (juce::Colours::white.withAlpha (0.38f));
+            g.fillRoundedRectangle (r.reduced (3.f, 2.f).withHeight (r.getHeight() * 0.38f), 4.f);      // the shine
+            g.setColour (juce::Colour (0xffff9a90));
+            g.drawRoundedRectangle (r.reduced (0.5f), 6.f, 1.f);
+            g.setColour (juce::Colours::white);
+        }
+        else
+        {
+            g.setColour (Theme::panel.brighter (0.06f));
+            g.fillRoundedRectangle (r, 6.f);
+            g.setColour (Theme::grid.brighter (0.15f));
+            g.drawRoundedRectangle (r.reduced (0.5f), 6.f, 1.f);
+            g.setColour (Theme::dim);
+        }
+        g.setFont (juce::Font (10.f, juce::Font::bold));
+        g.drawText ("REC", recRect, juce::Justification::centred);
+    }
+
+    void resized() override
+    {
+        recRect = { 3, getHeight() - 32, getWidth() - 6, 26 };
+        vol.setBounds ((getWidth() - 38) / 2, getHeight() - footer + 16, 38, 38);
+    }
+
+    std::function<void()> onRecorded;                                  // called after a recording has landed on the selected pad
+
     void mouseDown (const juce::MouseEvent& e) override
     {
+        if (side == 0 && recRect.contains (e.getPosition()))
+        {
+            if (! recOn) { proc.startInputRecording(); recOn = true; }
+            else finishRecording();
+            repaint();
+            return;
+        }
         if (clipRect.contains (e.getPosition())) proc.clipped[side] = false;
         hold[0] = hold[1] = -100.f;                                    // any click also resets the peak-hold lines
     }
 
 private:
+    void finishRecording()
+    {
+        recOn = false;
+        proc.stopInputRecording();
+        juce::Component::SafePointer<MeterStrip> safe (this);         // a short wait so the audio side has finished writing
+        juce::Timer::callAfterDelay (150, [safe]
+        {
+            if (safe == nullptr) return;
+            if (safe->proc.commitRecording (safe->proc.selectedPad.load())) { if (safe->onRecorded) safe->onRecorded(); }
+            else juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "Nothing was recorded",
+                     "No audio came in. In the standalone app, open Options > Audio/MIDI Settings, pick your input, and untick \"Mute audio input\". "
+                     "In a DAW, route audio into the plugin's input.");
+        });
+    }
+
     void timerCallback() override
     {
+        if (side == 0)
+        {
+            if (recOn && ! proc.recArmed.load()) finishRecording();    // it stopped itself after 60 s
+            const float db = juce::Decibels::gainToDecibels (proc.inputGain.load(), -30.f);
+            if (std::abs (db - (float) vol.getValue()) > 0.06f) vol.setValue (db, juce::dontSendNotification);   // follows a loaded project
+        }
         for (int ch = 0; ch < 2; ++ch)
         {
             const float p = proc.peak[side][ch].exchange (0.f);
@@ -75,5 +157,8 @@ private:
     int side;
     juce::String name;
     float level[2], hold[2];
-    juce::Rectangle<int> clipRect;
+    juce::Rectangle<int> clipRect, recRect;
+    juce::Slider vol;
+    bool recOn = false;
+    static constexpr int footer = 104;                                 // room under the bars (both meters, so the bars line up)
 };
