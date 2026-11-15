@@ -1,43 +1,43 @@
-# Beat Station Phase 12 — JUCE 7 Port + Build Notes (Nov 15, 2026)
+# Beat Station Phase 15 — JUCE 7 Port + Build Notes (Nov 15, 2026)
 
-## What Phase 12 contains (verified against Phase 9, file by file)
-Phases 10, 11 and 12 in one zip (no separate 10/11 sent). 12 files
-changed plus 8 new: Booth.h, BoothPanel.h, BoothPresets.h, FxChain.h,
-FxDsp.h, FxPresets.h, FxViews.h, TracksPanel.h.
-- **Phase 10 — effects suite:** the FX window is a chain of 11 effects
-  (EQ, COMP, DRIVE, FILTER, CRUSH, PUNCH, CHORUS, DELAY, ROOM, WIDTH,
-  LIMITER) — click a tab's light for on/off, drag tabs to reorder,
-  order saved with the project. 61 chain presets in 9 categories.
-  DRIVE and LIMITER add latency that is not yet reported to a DAW.
-- **Phase 11 — multitrack + Vocal Booth:** TRACKS tab with 8 audio
-  tracks in time with the beat (arm, REC, mute/solo/volume, WAV takes
-  saved and reloaded; tracks 1–4 are Booth tracks). BOOTH page
-  (title-bar button): 10 microphone characters + Off (tonal characters
-  from published descriptions, not measurements), BURN IN THE MIC,
-  vocal chain MIC > GATE > DE-ESS > COMP > EQ > DRIVE > DOUBLER >
-  DELAY > REVERB (reorderable), tone graph, meters, 50 vocal presets
-  (30 hip-hop). KEYS gets REC TO STEPS. Limits per its README: one
-  take per track, one shared Booth chain, no pitch correction (that
-  arrives in Phase 12), no latency compensation on takes.
-- **Phase 12 — punch + pitch:** punch recording on TRACKS and in the
-  Booth (Whole take / Manual / Auto IN-OUT / Match punch — drops in
-  by itself when your level matches your last take, join placed at a
-  breath; undo/redo of the last take). TUNE pitch correction in the
-  Booth (key, scale, speed, amount; per-track tuner, not recorded
-  into the take; ~27 ms delay compensated on playback).
+## What Phase 15 contains (verified against Phase 13, file by file)
+Phases 14 and 15 in one zip. 15 files changed plus 3 new:
+MasterDsp.h, Mastering.h, MasteringPanel.h. The zip also carries
+`manual-shots/` — the manual's screenshots (kept in the Source
+package; not needed to build, so left out of the GitHub-Ready one).
+- **Phase 14 — the Mastering Station** (MIXER > MASTERING STATION
+  switch on the master channel; the switch now works and lights):
+  chain EQ > GLUE > MULTIBAND > COLOR > IMAGER > CLIPPER > LIMITER
+  (fixed order, limiter last, true-peak, −1 dBTP default). Meter
+  bridge: LUFS loudness (BS.1770/EBU R128 — NOW / 3 SEC / SONG),
+  targets (Streaming −14, Apple −16, Loud hip-hop −9, Club −7),
+  highest true peak, per-stage gain reduction, RESET METERS.
+  21 presets; MATCH TARGET sets limiter gain to hit the target;
+  BOUNCE writes the song to WAV (24-bit, or 16-bit with dither).
+  Limits per its README: fixed stage order, real-time WAV-only
+  bounce, no reference A/B or MP3 preview yet, ~4 ms added delay
+  not reported to a DAW.
+- **Phase 15 — fixes found while photographing every screen for
+  the manual:** number readouts no longer show long decimals; TUNE
+  screen no longer jumps between tracks or smears; mixer VU needles
+  redrawn inside the dial; Deck CUT FADER/PITCH labels uncovered;
+  keyboard opens at C1; FX DELAY labels fixed; SHAPE help text got
+  its own strip.
 
-## The port (same standard way as Phase 4–9)
+## The port (same standard way as Phase 4–13)
 - **JUCE 8.0.4 → JUCE 7.0.12.** JUCE 8's deployment target is Windows 10
   only. JUCE 7.0.12's README lists its Windows deployment target as
   Vista onward — this build covers **Windows 7, 8, 8.1, 10 and 11**,
-  including D's Windows 8.1 Pro PC. Port surface: 44
+  including D's Windows 8.1 Pro PC. Port surface: 66
   `juce::Font(juce::FontOptions(...))` calls converted to JUCE 7
   `juce::Font(size, style)`.
-- Bugs fixed again: missing `juce_audio_devices` (include + CMake
-  link); `juce::jmin<juce::int64>` → `std::min`, now in FOUR places
-  (a fourth sample loader lives in the new Booth.h).
-- The ported Phase 12 tree was diffed against the ported Phase 9 tree:
-  the same 20 files differ — nothing else moved.
+- **They fixed two of the three recurring bugs themselves this
+  time**: `jmin<juce::int64>`/`jmax<juce::int64>` are now
+  `std::min`/`std::max`, and `PluginProcessor.h` includes
+  `juce_audio_devices`. The CMake link line still omits
+  `juce_audio_devices`, so the port adds it there as before.
+- The ported Phase 15 tree was diffed against the ported Phase 13
+  tree: the same 18 source files differ — nothing else moved.
 
 ## Verification (Linux, Nov 15, 2026)
 - JUCE 7.0.12 build result, artefact sizes, dlopen/GetPluginFactory

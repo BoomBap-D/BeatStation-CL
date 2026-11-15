@@ -296,3 +296,84 @@ Every pass is captured from the moment Play starts. The punch mode decides which
 - Match punch detector, simulated on five cases: joining at the start of a phrase (same level; 4 dB louder and early; 3 dB quieter), joining mid-phrase, and never rapping.
   It placed the join at the phrase start in the first three, where the performer came in for the fourth, and left the take alone in the fifth.
 - These were synthetic signals. Real voices (breathy, raspy, very fast) will need tuning by ear.
+
+## Phase 13 - the mixer
+
+**MIXER button** (title bar, next to BOOTH). It covers the main area like FX and BOOTH; press it again or "Back to pads" to leave.
+
+**Channels**, left to right: the 16 pads, Keys, Deck, the 8 audio tracks, the Booth output, then the MASTER channel.
+- Each channel: name, pan bar (drag sideways; double-click = centre), **M** mute, **S** solo, a fader with a level meter and peak-hold line (double-click = 0 dB), and its level in dB.
+- Hover over a channel to see its full name (the pad's sample, the track's name) at the top.
+- **Faders and pans now act live**, including on notes that are already ringing. Before this build a pad's level and pan were fixed at the moment it was hit.
+- **Solo works across everything**: solo a pad and the keys, deck and audio tracks go quiet, and the other way round.
+- The pad faders are the same control as the LEVEL and PAN knobs on the pad page, so they move together and can be MIDI-learned.
+- Mutes, the keys level and pan, and the deck level are saved with the project. Solos are not (they reset to off).
+
+**MASTER channel**
+- A pair of VU meters (0 VU = -18 dBFS average, the usual studio line-up), L and R output meters with peak hold, the peak reading in dB, and a CLIP light that stays on until clicked.
+- **Master fader** (new parameter "Master Volume", after all the effects). It glides, so moving it never clicks.
+- **MONO**: hear the mix on one speaker to check nothing disappears. **DIM**: 20 dB quieter while you talk.
+- The **MASTERING STATION** switch is in place on the master channel but is not active yet: that is the next build.
+
+**Not in this build**: per-channel EQ, compressor and effect sends; grouping; the Deck and the Booth have no pan; the Booth channel has mute but no solo (solo the vocal tracks instead).
+
+## Phase 14 - the Mastering Station
+
+**How to get there**: MIXER > the **MASTERING STATION** switch on the master channel. "Back" returns to the mixer. The switch lights up while the station is on, and the master channel now shows the loudness in LUFS.
+
+**Where it sits**: everything > master effects chain > master fader > **mastering station** > MONO / DIM (listening only) > output.
+
+**The chain** (fixed order, the limiter always last). Click a stage for its picture and knobs; click its light to switch it on or off.
+1. **EQ** - four broad bands on the whole mix, plus two moves on the sides only: SIDE LOW CUT (keeps the bass and 808 in the centre) and SIDE AIR.
+2. **GLUE** - a gentle stereo bus compressor. Its side-chain low cut stops the kick and 808 from making the whole mix pump.
+3. **MULTIBAND** - low / mid / high compressor, each band with threshold, ratio and gain, and two movable split points.
+4. **COLOR** - valve-style warmth on the lows and mids, and new "air" harmonics on top.
+5. **IMAGER** - stereo width for low / mid / high separately (0 = mono, 100% = unchanged, 200% = extra wide).
+6. **CLIPPER** - shaves the tips of the loudest hits before the limiter, at twice the sample rate.
+7. **LIMITER** - 3 ms look-ahead, working on the true (between-sample) peak. Default ceiling -1 dBTP.
+
+**The meter bridge** (left side, always running, even with the station off)
+- **Loudness in LUFS** to the ITU BS.1770 / EBU R128 standard: NOW (0.4 s), 3 SEC, and SONG (integrated, with the standard's two gates).
+- **Target**: Streaming -14, Apple Music -16, Loud hip-hop -9, Club -7. The bridge says how many LU louder or quieter than the target the song is.
+- **Highest true peak** in dBTP (8x oversampled), red if it is over the ceiling.
+- **Gain being held back** by the glue, each multiband band, the clipper and the limiter.
+- **RESET METERS** starts the song measurement again.
+
+**One-click workflow**
+1. Pick a master from PRESET (21: Start Here, Hip-Hop, Other Styles, Problem Solvers). That switches the station on.
+2. Play the song through once.
+3. Press **MATCH TARGET**: it sets the limiter gain so the song's loudness lands on the target you chose. Play again to check.
+4. **BOUNCE...**: choose 24-bit, or 16-bit with dither. The song plays from the start and is written to a WAV (Documents > Beat Station > Bounces by default).
+   Press Stop when the song ends; it keeps writing for 2.5 seconds so reverb and echo tails are not cut, then closes the file.
+
+**Tested here** (offline, at 44.1, 48 and 96 kHz)
+- Loudness meter: the standard's check tone (1 kHz stereo sine at -23 dBFS) read -22.99 to -23.01 LUFS on all three readings. Gating ignored a near-silent half.
+- True-peak meter: a tone whose samples only reach -3.01 dB but whose real peak is 0 dB read -0.04 dB.
+- Limiter at a -1.0 dBTP ceiling with 0, +8 and +16 dB of gain on a harsh test signal: the output true peak (checked with a separate 16x reconstruction) was -1.03 to -1.25 dBTP. It never went over.
+- Band split put back together: flat to 0.000 dB. Glue ratio correct; with the side-chain low cut at 150 Hz a loud 45 Hz tone caused 0.0 dB of reduction.
+- Multiband squeezed only its own band (a 5 kHz tone moved 0.01 dB while the low band was compressed 16 dB). Imager made out-of-phase bass mono and widened the top as set.
+- Clipper held a 0 dB tone to -3.02 dB at a -3 dB ceiling and left quiet sound untouched. 16-bit dither noise floor: -96.3 dBFS.
+- The whole chain plus meters costs about 5% of one CPU core.
+
+**Limits in this build**
+- The stage order is fixed (EQ ... LIMITER). The FX window's chain is still reorderable.
+- No reference-track A/B yet, no MP3/AAC preview, no loudness-range or album tools.
+- The bounce is in real time (it plays the song) and is WAV only.
+- The limiter aims 0.4 dB under the ceiling to guarantee the true peak, so a master set to -1 dBTP usually measures around -1.1 to -1.3.
+- The station adds about 4 ms of delay when the clipper and limiter are on. A DAW is not told about this yet.
+- Preset values are engineering starting points and have not been tuned by ear.
+
+## Phase 15 - fixes found while photographing every screen for the manual
+
+Every screen was built and run for real (Linux, JUCE 8.0.4) to take the manual's pictures. That turned up these, all fixed and re-checked by photographing again:
+
+- **Number readouts**: knob values could show long decimals ("999.9999390 Hz", "50.658 cents", "26.75 ms"). Values now show 0 decimals from 100 up, 1 decimal from 10 up, 2 below that.
+- **TUNE screen**: with several vocal tracks the reading jumped between them. It now shows the live input while monitoring, otherwise the armed track (or the first track with a note). The picture no longer smears when the note jumps more than 5 semitones.
+- **Mixer VU meters**: the needle and scale could draw outside the dial. Redrawn as a wide, shallow arc kept inside the dial, with a red zone from 0 VU.
+- **Deck**: the CUT FADER label was hidden under the cue buttons and the PITCH label under the tonearm. Tonearm, cues, cut fader and hint text were moved apart.
+- **Keyboard** now opens at C1 (where bass lines live) instead of C0.
+- **FX DELAY screen**: LEFT/RIGHT labels no longer sit under the dry bar.
+- **SHAPE drawer**: the help text has its own strip and no longer covers the knob names.
+- **Build fixes** (Linux/macOS compilers): `jmin<juce::int64>` / `jmax<juce::int64>` replaced with `std::min` / `std::max`; `PluginProcessor.h` now includes `juce_audio_devices` for `MidiInput`.
+
+The manual's screenshots are in `manual-shots/`.
