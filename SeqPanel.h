@@ -237,7 +237,12 @@ public:
         auto leftClick = [] { return ! juce::ModifierKeys::currentModifiers.isPopupMenu(); };   // a right-click must not also press the button
         playBtn.onClick = [this, leftClick] { if (leftClick()) proc.startPlaying(); };
         stopBtn.onClick = [this, leftClick] { if (leftClick()) proc.stopPlaying(); };
-        recBtn.onClick = [this, leftClick] { if (leftClick()) proc.recording = ! proc.recording.load(); };
+        recBtn.onClick = [this, leftClick]                               // REC also starts the beat if it is stopped: nothing records while stopped
+        {
+            if (! leftClick()) return;
+            proc.recording = ! proc.recording.load();
+            if (proc.recording.load() && ! proc.playing.load()) proc.startPlaying();
+        };
         clearBtn.onClick = [this] { proc.clearPattern(); rows.repaint(); };
         barsBtn.onClick = [this]                                          // one button: pick how many bars the pattern has
         {

@@ -52,14 +52,31 @@ public:
                 sp.lineTo (b.getX() + (float) i, b.getBottom() - juce::jmap (smooth[i], -100.f, -10.f, 0.f, b.getHeight()));
             sp.lineTo (b.getRight(), b.getBottom());
             sp.closeSubPath();
-            g.setColour (Theme::amber.withAlpha (0.14f));
+            juce::ColourGradient rainbow (Theme::bandColours[0].withAlpha (0.42f), b.getX(), 0.f, Theme::bandColours[4].withAlpha (0.42f), b.getRight(), 0.f, false);
+            for (int i = 1; i < 4; ++i) rainbow.addColour ((double) i / 4.0, Theme::bandColours[i].withAlpha (0.42f));   // low to high: the band colours
+            g.setGradientFill (rainbow);
             g.fillPath (sp);
+            g.setColour (Theme::graphBg.withAlpha (0.45f));               // fades towards the bottom so the curves stay readable
+            g.fillRect (b.withTrimmedTop (b.getHeight() * 0.6f));
         }
 
         // Response curve
         const double sr = proc.getSR();
         std::vector<MasterFx::Coeffs> co;
         for (int i = 0; i < MfxID::numBands; ++i) co.push_back (proc.makeBandCoeffs (i, sr));
+
+        for (int i = 0; i < MfxID::numBands; ++i)                         // each band's own boost or cut, in that band's colour
+        {
+            juce::Path one;
+            one.startNewSubPath (b.getX(), gainToY (0.f));
+            for (float x = b.getX(); x <= b.getRight(); x += 2.f)
+                one.lineTo (x, gainToY (juce::Decibels::gainToDecibels ((float) co[(size_t) i]->getMagnitudeForFrequency (xToFreq (x), sr))));
+            one.lineTo (b.getRight(), gainToY (0.f));
+            one.closeSubPath();
+            g.setColour (Theme::bandColours[i].withAlpha (i == selected ? 0.42f : 0.2f));
+            g.fillPath (one);
+            if (i == selected) { g.setColour (Theme::bandColours[i]); g.strokePath (one, juce::PathStrokeType (1.4f)); }
+        }
 
         juce::Path curve;
         for (float x = b.getX(); x <= b.getRight(); x += 2.f)
@@ -73,7 +90,7 @@ public:
         fill.lineTo (b.getRight(), gainToY (0.f));
         fill.lineTo (b.getX(), gainToY (0.f));
         fill.closeSubPath();
-        g.setColour (Theme::amber.withAlpha (0.10f));
+        g.setColour (Theme::text.withAlpha (0.05f));
         g.fillPath (fill);
         g.setColour (Theme::text);
         g.strokePath (curve, juce::PathStrokeType (2.2f));
@@ -95,7 +112,7 @@ public:
         // Readout for the selected band
         g.setColour (Theme::text);
         g.setFont (12.f);
-        g.drawText ("BAND " + juce::String (selected + 1) + "   " + juce::String (val (MfxID::freq (selected)), 0) + " Hz   "
+        g.drawText ("BAND " + juce::String (selected + 1) + "   " + juce::String (juce::roundToInt (val (MfxID::freq (selected)))) + " Hz   "
                       + juce::String (val (MfxID::gain (selected)), 1) + " dB   Q " + juce::String (val (MfxID::q (selected)), 2),
                     (int) b.getX() + 40, (int) b.getY() + 6, 400, 16, juce::Justification::left);
     }

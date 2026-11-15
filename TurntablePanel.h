@@ -151,9 +151,9 @@ public:
         loadFileBtn.setBounds (722, 28, 84, 28);
         waveRect = { 596, 66, 404, 96 };
         for (int i = 0; i < 8; ++i)
-            cues[(size_t) i]->setBounds (596 + (i % 4) * 102, 194 + (i / 4) * 42, 94, 34);
-        cutFader.setBounds (596, 280, 290, 40);
-        holdBtn.setBounds (896, 284, 104, 32);
+            cues[(size_t) i]->setBounds (596 + (i % 4) * 102, 190 + (i / 4) * 40, 94, 34);
+        cutFader.setBounds (596, 288, 290, 36);
+        holdBtn.setBounds (896, 290, 104, 32);
     }
 
     void paint (juce::Graphics& g) override
@@ -233,7 +233,7 @@ public:
 
         // ---- tonearm ----
         {
-            const juce::Point<float> P (505.f, 52.f), C (cx, cy);
+            const juce::Point<float> P (476.f, 54.f), C (cx, cy);   // the tonearm base sits left of the pitch section
             const float L = 290.f;
             const double len = sample != nullptr ? (double) sample->data.getNumSamples() : 1.0;
             const float prog = sample != nullptr ? (float) juce::jlimit (0.0, 1.0, pos / len) : 0.f;
@@ -296,11 +296,11 @@ public:
         g.setColour (Theme::dim);
         g.setFont (juce::Font (11.f, juce::Font::bold));
         g.drawText ("HOT CUES   (the chops of the pad it came from)", 596, 172, 404, 16, juce::Justification::centredLeft);
-        g.drawText ("CUT FADER", 596, 262, 120, 16, juce::Justification::centredLeft);
+        g.drawText ("CUT FADER", 596, 270, 120, 16, juce::Justification::centredLeft);
         g.setFont (11.f);
         g.drawFittedText ("Grab the platter and move it to scratch. Click the waveform to jump. Click a cue to jump to it (right-click to set or clear).\n"
                           "Hold CUT to silence the deck. The whole sample is always on the record, chopped or not.",
-                          596, 328, 404, 46, juce::Justification::topLeft, 3);
+                          596, 330, 404, 48, juce::Justification::topLeft, 3);
     }
 
     // ---- platter and waveform mouse handling ----

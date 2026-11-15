@@ -2,10 +2,10 @@
 
 BeatStationEditor::BeatStationEditor (BeatStationProcessor& p)
     : AudioProcessorEditor (&p), proc (p), inMeter (p, 0, "IN"), outMeter (p, 1, "OUT"), pads (p), wave (p), browser (p), seq (p), shape (p),
-      keyboard (p), fx (p), turntable (p)
+      keyboard (p), fx (p), boothPanel (p), trackList (p, 0, AudioTracks::num), mixer (p), masteringPanel (p), turntable (p)
 {
     setLookAndFeel (&lnf);
-    for (auto* c : std::initializer_list<juce::Component*> { &inMeter, &outMeter, &pads, &wave, &browser, &seq, &shape, &keyboard, &fx, &turntable, &padsModeBtn, &deckModeBtn, &padSrcBtn, &fxBtn, &fileBtn,
+    for (auto* c : std::initializer_list<juce::Component*> { &inMeter, &outMeter, &pads, &wave, &browser, &seq, &shape, &keyboard, &fx, &boothPanel, &trackList, &tracksTab, &boothBtn, &mixer, &mixerBtn, &masteringPanel, &turntable, &padsModeBtn, &deckModeBtn, &padSrcBtn, &fxBtn, &fileBtn,
                                                               &loadBtn, &clearBtn, &clearChopsBtn, &fullBtn, &modeBtn, &keysBtn,
                                                               &chop4, &chop8, &chop16, &chopHits, &stopBtn, &playTop, &stopTop,
                                                               &editTab, &browseTab, &keysTab, &seqTab, &shapeTab, &kitBox,
@@ -57,7 +57,17 @@ BeatStationEditor::BeatStationEditor (BeatStationProcessor& p)
     seq.onLoaded = [this] (int pad) { refreshAfterEdit(); selectPad (pad); };
     browser.onLoadToPad = [this] (const juce::File& f, int pad) { proc.loadSample (pad, f); selectPad (pad); refreshAfterEdit(); };
     fx.onBack = [this] { fxMode = false; updateView(); };
-    fxBtn.onClick = [this] { fxMode = ! fxMode; updateView(); };
+    // FX, BOOTH and MIXER each cover the main area. Pressing the lit one again goes back to the pads.
+    fxBtn.onClick = [this] { const bool was = fxMode && ! boothOpen && ! mixerOpen; fxMode = ! was; boothOpen = mixerOpen = masterOpen = false; updateView(); };
+    boothBtn.onClick = [this] { const bool was = fxMode && boothOpen; fxMode = ! was; boothOpen = true; mixerOpen = masterOpen = false; updateView(); };
+    mixerBtn.onClick = [this] { const bool was = fxMode && mixerOpen && ! masterOpen; fxMode = ! was; mixerOpen = true; boothOpen = masterOpen = false; updateView(); };
+    mixer.onBack = [this] { fxMode = false; masterOpen = false; updateView(); };
+    mixer.onMastering = [this] { masterOpen = true; updateView(); };                 // the switch on the master channel
+    masteringPanel.onBack = [this] { masterOpen = false; updateView(); };            // back to the mixer
+    masteringPanel.learn = [this] (const juce::String& t) { showLearnMenu (t); };
+    boothPanel.onBack = [this] { fxMode = false; updateView(); };
+    boothPanel.learn = [this] (const juce::String& t) { showLearnMenu (t); };
+    tracksTab.onClick = [this] { drawer = 3; updateDrawer(); };
     padsModeBtn.onClick = [this] { deckMode = false; fxMode = false; updateView(); };
     deckModeBtn.onClick = [this] { deckMode = true;  fxMode = false; updateView(); };
     fileBtn.onClick = [this] { showFileMenu(); };
@@ -125,7 +135,7 @@ BeatStationEditor::BeatStationEditor (BeatStationProcessor& p)
     selectPad (0);
     updateView();
     setWantsKeyboardFocus (true);
-    setSize (1132, 730);
+    setSize (1192, 730);
     if (std::abs (proc.uiScale.load() - 1.f) > 0.001f) applyScale (proc.uiScale.load());
     startTimerHz (15);
 }
@@ -156,12 +166,17 @@ void BeatStationEditor::updateRightMode()
 void BeatStationEditor::updateView()
 {
     for (auto* c : std::initializer_list<juce::Component*> { &pads, &editTab, &browseTab }) c->setVisible (! fxMode && ! deckMode);
-    for (auto* c : std::initializer_list<juce::Component*> { &keysTab, &seqTab, &shapeTab }) c->setVisible (! fxMode);
+    for (auto* c : std::initializer_list<juce::Component*> { &keysTab, &seqTab, &shapeTab, &tracksTab }) c->setVisible (! fxMode);
     turntable.setVisible (deckMode && ! fxMode);
     padsModeBtn.setToggleState (! deckMode, juce::dontSendNotification);
     deckModeBtn.setToggleState (deckMode, juce::dontSendNotification);
-    fx.setVisible (fxMode);
-    fxBtn.setToggleState (fxMode, juce::dontSendNotification);
+    fx.setVisible (fxMode && ! boothOpen && ! mixerOpen);
+    boothPanel.setVisible (fxMode && boothOpen);
+    mixer.setVisible (fxMode && mixerOpen && ! masterOpen);
+    masteringPanel.setVisible (fxMode && mixerOpen && masterOpen);
+    mixerBtn.setToggleState (fxMode && mixerOpen, juce::dontSendNotification);
+    fxBtn.setToggleState (fxMode && ! boothOpen && ! mixerOpen, juce::dontSendNotification);
+    boothBtn.setToggleState (fxMode && boothOpen, juce::dontSendNotification);
     updateRightMode();
     updateDrawer();
     repaint();
@@ -189,7 +204,7 @@ void BeatStationEditor::showFileMenu()
             float s = (float) (r - 100) / 100.f;
             if (r == 99)
                 if (auto* d = juce::Desktop::getInstance().getDisplays().getDisplayForRect (ed->getScreenBounds()))
-                    s = juce::jmin ((float) d->userArea.getWidth() / 1132.f, (float) (d->userArea.getHeight() - 70) / 730.f) * 0.98f;   // 70 = title bar and menu
+                    s = juce::jmin ((float) d->userArea.getWidth() / 1192.f, (float) (d->userArea.getHeight() - 70) / 730.f) * 0.98f;   // 70 = title bar and menu
             ed->applyScale (s);
             return;
         }
@@ -235,6 +250,8 @@ void BeatStationEditor::updateDrawer()
     keyboard.setVisible (drawer == 0 && ! fxMode);
     seq.setVisible (drawer == 1 && ! fxMode);
     shape.setVisible (drawer == 2 && ! fxMode);
+    trackList.setVisible (drawer == 3 && ! fxMode);
+    tracksTab.setToggleState (drawer == 3, juce::dontSendNotification);
     keysTab.setToggleState (drawer == 0, juce::dontSendNotification);
     seqTab.setToggleState (drawer == 1, juce::dontSendNotification);
     shapeTab.setToggleState (drawer == 2, juce::dontSendNotification);
@@ -316,6 +333,7 @@ void BeatStationEditor::timerCallback()
 {
     keyboard.sync();
     syncPadSource();
+    proc.tracks.commitTake();                                         // a finished recording lands on its track here
     if (std::abs (proc.uiScale.load() - shownScale) > 0.001f) applyScale (proc.uiScale.load());   // a loaded project brings its window size
     const bool learning = proc.getLearnTarget().isNotEmpty();
     const int version = proc.mapVersion.load(), lm = proc.lastMidi.load();
@@ -350,9 +368,14 @@ void BeatStationEditor::resized()
     playTop.setBounds (titleRect.getX() + 368, titleRect.getY() + 5, 52, 34);
     stopTop.setBounds (titleRect.getX() + 424, titleRect.getY() + 5, 52, 34);
     fxBtn.setBounds (titleRect.getX() + 484, titleRect.getY() + 5, 44, 34);
-    padsModeBtn.setBounds (titleRect.getX() + 540, titleRect.getY() + 5, 56, 34);
-    deckModeBtn.setBounds (titleRect.getX() + 600, titleRect.getY() + 5, 56, 34);
+    padsModeBtn.setBounds (titleRect.getX() + 534, titleRect.getY() + 5, 50, 34);
+    deckModeBtn.setBounds (titleRect.getX() + 588, titleRect.getY() + 5, 50, 34);
+    boothBtn.setBounds (titleRect.getX() + 644, titleRect.getY() + 5, 56, 34);
+    mixerBtn.setBounds (titleRect.getX() + 704, titleRect.getY() + 5, 56, 34);
     fx.setBounds (r);                                                   // the master EQ/compressor window covers everything under the title
+    boothPanel.setBounds (r);
+    mixer.setBounds (r);
+    masteringPanel.setBounds (r);
     bannerRect = { getWidth() / 2 - 300, 4, 600, 32 };
 
     auto main = r.removeFromTop (380);
@@ -393,8 +416,10 @@ void BeatStationEditor::resized()
     auto dtabs = r.removeFromTop (34);
     keysTab.setBounds (dtabs.removeFromLeft (90));   dtabs.removeFromLeft (6);
     seqTab.setBounds (dtabs.removeFromLeft (110));   dtabs.removeFromLeft (6);
-    shapeTab.setBounds (dtabs.removeFromLeft (90));
+    shapeTab.setBounds (dtabs.removeFromLeft (90));    dtabs.removeFromLeft (6);
+    tracksTab.setBounds (dtabs.removeFromLeft (100));
     r.removeFromTop (8);
+    trackList.setBounds (r);
     keyboard.setBounds (r);
     seq.setBounds (r);
     shape.setBounds (r);
@@ -418,8 +443,8 @@ void BeatStationEditor::paint (juce::Graphics& g)
         if (lm != 0) last = ((lm >> 24) == 1 ? "CC " : "Note ") + juce::String ((lm >> 8) & 255) + " ch" + juce::String ((lm >> 16) & 255) + " = " + juce::String (lm & 255);
         const juce::String devices = isStandalone() ? (proc.midiNames.isEmpty() ? juce::String ("MIDI: none found") : "MIDI: " + proc.midiNames.joinIntoString (", "))
                                                     : juce::String ("MIDI from the host");
-        g.drawFittedText (devices, titleRect.getX() + 664, titleRect.getY() + 4, 126, 16, juce::Justification::centredLeft, 1);
-        g.drawFittedText ("last: " + last, titleRect.getX() + 664, titleRect.getY() + 22, 126, 16, juce::Justification::centredLeft, 1);
+        g.drawFittedText (devices, titleRect.getX() + 766, titleRect.getY() + 4, 76, 16, juce::Justification::centredLeft, 1);
+        g.drawFittedText ("last: " + last, titleRect.getX() + 766, titleRect.getY() + 22, 76, 16, juce::Justification::centredLeft, 1);
     }
 
     if (rightMode == 0 && ! fxMode && ! deckMode)

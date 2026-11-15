@@ -1,8 +1,9 @@
 #pragma once
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "SynthPatches.h"
-#include "MasterFx.h"
-#include "RoomFx.h"
+#include "FxChain.h"
+#include "Booth.h"
+#include "Mastering.h"
 
 constexpr int numPads = 16;      // phase 1: one bank. Banks B, C, D... come next.
 constexpr int firstNote = 36;    // default MIDI note of pad 1 (the usual MPC layout, 36-51); each pad can be MIDI-learned to another note
@@ -72,5 +73,9 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
     }
     MasterFx::addParameters (l);                                       // the master EQ and compressor
     RoomFx::addParameters (l);                                         // the room reverb
+    FxChain::addParameters (l);                                        // the rest of the effects suite
+    BoothChain::addParameters (l);                                     // the vocal booth
+    MasterStation::addParameters (l);                                  // the mastering station
+    l.add (std::make_unique<juce::AudioParameterFloat> (juce::ParameterID { "master_vol", 1 }, "Master Volume", juce::NormalisableRange<float> (-60.f, 6.f, 0.1f), 0.f));   // the master fader, after all effects
     return l;
 }

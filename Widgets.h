@@ -54,6 +54,8 @@ public:
         refresh();
     }
 
+    void setAccent (juce::Colour c) { slider.setColour (juce::Slider::rotarySliderFillColourId, c); slider.repaint(); }   // the colour of the lit ticks
+
     void resized() override
     {
         auto b = getLocalBounds();
@@ -63,7 +65,17 @@ public:
     }
 
 private:
-    void refresh() { value.setText (slider.getTextFromValue (slider.getValue()) + suffix, juce::dontSendNotification); }
+    void refresh()                                                      // numbers get sensible decimals (999.9999390 Hz -> 1000 Hz); words (Minor, On) pass through
+    {
+        auto t = slider.getTextFromValue (slider.getValue()).trim();
+        if (t.containsOnly ("-+.0123456789") && t.containsAnyOf ("0123456789"))
+        {
+            const double v = t.getDoubleValue(), a = std::abs (v);
+            t = juce::String (v, a >= 100.0 ? 0 : (a >= 10.0 ? 1 : 2));
+            if (a >= 100.0) t = juce::String (juce::roundToInt (v));
+        }
+        value.setText (t + suffix, juce::dontSendNotification);
+    }
 
     LearnSlider slider;
     juce::Label name, value;

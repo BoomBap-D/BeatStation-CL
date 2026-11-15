@@ -66,7 +66,7 @@ public:
         }
         in.lineTo (hist.getRight(), hist.getBottom()); in.closeSubPath();
         grP.lineTo (hist.getRight(), hist.getY());     grP.closeSubPath();
-        g.setColour (Theme::amber.withAlpha (0.20f));  g.fillPath (in);
+        g.setColour (juce::Colour (0xff3ad0e0).withAlpha (0.30f));  g.fillPath (in);     // the level coming in, in blue so the red gain reduction stands out
         g.setColour (Theme::red.withAlpha (0.65f));    g.fillPath (grP);
         g.setColour (Theme::dim);
         g.setFont (11.f);

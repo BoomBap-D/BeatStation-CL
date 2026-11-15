@@ -7,6 +7,9 @@
 #include "SeqPanel.h"
 #include "ShapePanel.h"
 #include "FxPanel.h"
+#include "BoothPanel.h"
+#include "MixerPanel.h"
+#include "MasteringPanel.h"
 #include "KeyboardPanel.h"
 #include "Meters.h"
 #include "SampleBrowser.h"
@@ -45,13 +48,19 @@ private:
     ShapePanel shape;
     KeyboardPanel keyboard;
     FxPanel fx;
+    BoothPanel boothPanel;
+    TrackList trackList;
+    bool boothOpen = false, mixerOpen = false;
+    MixerPanel mixer;
+    MasteringPanel masteringPanel;
+    bool masterOpen = false;
     TurntablePanel turntable;
 
     juce::TextButton loadBtn { "Load..." }, clearBtn { "Clear Pad" }, clearChopsBtn { "Clear Chops" }, fullBtn { "Play Full" },
                      modeBtn { "Mode: Cut" }, keysBtn { "Keys" },
                      chop4 { "Chop 4" }, chop8 { "Chop 8" }, chop16 { "Chop 16" }, chopHits { "Chop at hits" },
                      stopBtn { "STOP" }, midiBtn { "MIDI" }, fxBtn { "FX" }, padsModeBtn { "PADS" }, padSrcBtn { "KITS" }, deckModeBtn { "DECK" }, fileBtn { "File" }, playTop { "Play" }, stopTop { "Stop" },
-                     editTab { "EDIT" }, browseTab { "BROWSE" }, keysTab { "KEYS" }, seqTab { "STEP SEQ" }, shapeTab { "SHAPE" };
+                     editTab { "EDIT" }, browseTab { "BROWSE" }, keysTab { "KEYS" }, seqTab { "STEP SEQ" }, shapeTab { "SHAPE" }, tracksTab { "TRACKS" }, boothBtn { "BOOTH" }, mixerBtn { "MIXER" };
     LabeledKnob level { "LEVEL", " dB", Theme::amber }, pan { "PAN", "", Theme::green }, tune { "TUNE", " st", Theme::amber },
                 choke { "CHOKE", "", Theme::amber };
     juce::ComboBox kitBox, padInstBox;

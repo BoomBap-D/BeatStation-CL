@@ -59,8 +59,9 @@ public:
         auto top = r.removeFromTop (34);
         for (auto& b : typeBtn) { b.setBounds (top.removeFromLeft (80)); top.removeFromLeft (3); }
         r.removeFromTop (6);
+        hintRect = r.removeFromBottom (40);                                // the help line gets its own strip under the knobs
         const int kw = r.getWidth() / 4;
-        for (auto* k : { &cutoff, &res, &amount, &fade }) k->setBounds (r.removeFromLeft (kw).withSizeKeepingCentre (80, 104));
+        for (auto* k : { &cutoff, &res, &amount, &fade }) k->setBounds (r.removeFromLeft (kw).withSizeKeepingCentre (80, juce::jmin (104, r.getHeight())));
     }
 
     void paint (juce::Graphics& g) override
@@ -68,10 +69,11 @@ public:
         g.setColour (Theme::dim);
         g.setFont (11.f);
         g.drawFittedText ("AMPLITUDE = loudness over time.  FILTER = how the cutoff moves over time; ENV AMT sets how far (in octaves, + opens, - closes).  FADE = tail length at the end of the chop.",
-                          getLocalBounds().removeFromBottom (44).removeFromRight (326), juce::Justification::topLeft, 3);
+                          hintRect, juce::Justification::topLeft, 3);
     }
 
 private:
+    juce::Rectangle<int> hintRect;
     void applyTarget()
     {
         editor.setTarget (pad, which, which == 0 ? Theme::amber : Theme::green);

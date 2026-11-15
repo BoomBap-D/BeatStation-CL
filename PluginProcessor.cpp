@@ -33,6 +33,7 @@ BeatStationProcessor::BeatStationProcessor()
     }
     for (auto& cue : deckCue) cue = -1.0;
     pKeys = apvts.getRawParameterValue (ParamID::keysMode);
+    pMaster = apvts.getRawParameterValue ("master_vol");
     pKeysInst = apvts.getRawParameterValue (ParamID::keysInst);
     pBpm = apvts.getRawParameterValue (ParamID::bpm);
     pSwing = apvts.getRawParameterValue (ParamID::swing);
@@ -87,7 +88,7 @@ void BeatStationProcessor::assign (int pad, std::shared_ptr<const Sample> s, con
 bool BeatStationProcessor::decodeInto (int pad, std::unique_ptr<juce::AudioFormatReader> reader, const juce::String& name, const juce::String& fileKey, float trim, bool internal)
 {
     if (reader == nullptr || reader->lengthInSamples <= 0) return false;
-    const int len = (int) std::min (reader->lengthInSamples, (juce::int64) (reader->sampleRate * 60.0));   // cap at 60 s
+    const int len = (int) std::min<juce::int64> (reader->lengthInSamples, (juce::int64) (reader->sampleRate * 60.0));   // cap at 60 s
     auto s = std::make_shared<Sample>();
     s->data.setSize (2, len);
     reader->read (&s->data, 0, len, 0, true, true);
@@ -307,7 +308,7 @@ void BeatStationProcessor::previewFile (const juce::File& file)
     {
         std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (file));
         if (reader == nullptr || reader->lengthInSamples <= 0) return;
-        const int len = (int) std::min (reader->lengthInSamples, (juce::int64) (reader->sampleRate * 30.0));   // first 30 s
+        const int len = (int) std::min<juce::int64> (reader->lengthInSamples, (juce::int64) (reader->sampleRate * 30.0));   // first 30 s
         auto s = std::make_shared<Sample>();
         s->data.setSize (2, len);
         reader->read (&s->data, 0, len, 0, true, true);
@@ -489,8 +490,8 @@ void BeatStationProcessor::startVoice (int pad, float velocity, int note, bool k
     v->ratio = smp->sampleRate / sampleRate * std::pow (2.0, (double) semis / 12.0);
     v->fadeOutLen = juce::jmax (1.0, 0.003 * sampleRate * v->ratio);
     v->relSamples = (double) P (pRel) * 0.001 * sampleRate;
-    v->gainL = gain * std::cos (angle) * 1.4142f;                     // equal-power pan, unity at centre
-    v->gainR = gain * std::sin (angle) * 1.4142f;
+    juce::ignoreUnused (gain, angle);
+    v->gainL = v->gainR = velocity;                                   // how hard it was hit. The pad's level and pan are applied live by the mixer.
     v->ampEnv = P (pAmpOn) > 0.5f ? ae : EnvData();                   // an envelope that is switched off is just flat
     v->fltEnv = fe;
     v->fltEnvOn = P (pFltOn) > 0.5f;
@@ -506,6 +507,7 @@ void BeatStationProcessor::renderSampler (juce::AudioBuffer<float>& buffer, int 
     float* R = buffer.getNumChannels() > 1 ? buffer.getWritePointer (1) : nullptr;
     const float fadeInLen = (float) (0.001 * sampleRate), maxCut = (float) (sampleRate * 0.45);
     const float msPerSample = (float) (1000.0 / sampleRate);
+    float pk[numPads] {};                                             // each pad's loudest moment in this stretch, for the mixer meters
 
     for (auto& v : voices)
     {
@@ -559,12 +561,15 @@ void BeatStationProcessor::renderSampler (juce::AudioBuffer<float>& buffer, int 
                 if (v.stopGain < 0.001f) { v.active = false; break; }
                 g *= v.stopGain;
             }
-            L[i] += l * v.gainL * g;
-            if (R != nullptr) R[i] += r * v.gainR * g;
+            const float ol = l * v.gainL * g * padGL[v.pad], orr = r * v.gainR * g * padGR[v.pad];
+            L[i] += ol;
+            if (R != nullptr) R[i] += orr;
+            pk[v.pad] = juce::jmax (pk[v.pad], std::abs (ol), std::abs (orr));
             v.pos += v.ratio;
             ++v.age;
         }
     }
+    for (int p = 0; p < numPads; ++p) if (pk[p] > padPeak[(size_t) p].load()) padPeak[(size_t) p] = pk[p];
 }
 
 static float polyBlep (float t, float dt)
@@ -608,6 +613,7 @@ void BeatStationProcessor::startSynth (int note, float velocity, int patchIndex)
 void BeatStationProcessor::renderSynth (juce::AudioBuffer<float>& buffer, int from, int to)
 {
     if (to <= from) return;
+    float kPeak = 0.f;
     float* L = buffer.getWritePointer (0);
     float* R = buffer.getNumChannels() > 1 ? buffer.getWritePointer (1) : nullptr;
     const float sr = (float) sampleRate, maxCut = sr * 0.45f, twoPi = juce::MathConstants<float>::twoPi;
@@ -673,11 +679,37 @@ void BeatStationProcessor::renderSynth (juce::AudioBuffer<float>& buffer, int fr
                 g *= v.stopGain;
             }
             const float out = v.filt.processSample (0, mix * aenv) * g;
-            L[i] += out;
-            if (R != nullptr) R[i] += out;
+            kPeak = juce::jmax (kPeak, std::abs (out) * juce::jmax (keysGL, keysGR));
+            L[i] += out * keysGL;
+            if (R != nullptr) R[i] += out * keysGR;
             ++v.age;
         }
     }
+    if (kPeak > keysPeak.load()) keysPeak = kPeak;
+}
+
+// Works out, once per block, how loud each mixer channel is: its fader and pan, its mute, and whether another channel is soloed.
+void BeatStationProcessor::updateMixer()
+{
+    bool solo = keysSolo.load() || deckSolo.load();
+    for (auto& s : padSolo) solo = solo || s.load();
+    bool trackSolo = false;
+    for (auto& t : tracks.tracks) trackSolo = trackSolo || t.solo.load();
+    tracks.externalSolo = solo;                                       // a soloed pad, keys or deck silences the audio tracks too
+    solo = solo || trackSolo;
+    for (int p = 0; p < numPads; ++p)
+    {
+        const bool on = ! padMute[(size_t) p].load() && (! solo || padSolo[(size_t) p].load());
+        const float g = on ? juce::Decibels::decibelsToGain (raw[p][pLevel]->load(), -59.9f) : 0.f;
+        const float angle = (raw[p][pPan]->load() + 1.f) * juce::MathConstants<float>::pi * 0.25f;
+        padGL[p] = g * std::cos (angle) * 1.4142f;                    // equal-power pan, unity at centre
+        padGR[p] = g * std::sin (angle) * 1.4142f;
+    }
+    const float kg = (! keysMute.load() && (! solo || keysSolo.load())) ? keysVol.load() : 0.f;
+    const float ka = (keysPan.load() + 1.f) * juce::MathConstants<float>::pi * 0.25f;
+    keysGL = kg * std::cos (ka) * 1.4142f;
+    keysGR = kg * std::sin (ka) * 1.4142f;
+    deckOn = (! deckMute.load() && (! solo || deckSolo.load())) ? 1.f : 0.f;
 }
 
 void BeatStationProcessor::render (juce::AudioBuffer<float>& buffer, int from, int to)
@@ -747,7 +779,7 @@ bool BeatStationProcessor::deckLoadFile (const juce::File& file)
 {
     std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (file));
     if (reader == nullptr || reader->lengthInSamples <= 0) return false;
-    const int len = (int) std::min (reader->lengthInSamples, (juce::int64) (reader->sampleRate * 60.0));
+    const int len = (int) std::min<juce::int64> (reader->lengthInSamples, (juce::int64) (reader->sampleRate * 60.0));
     auto s = std::make_shared<Sample>();
     s->data.setSize (2, len);
     reader->read (&s->data, 0, len, 0, true, true);
@@ -796,7 +828,8 @@ void BeatStationProcessor::renderDeck (juce::AudioBuffer<float>& buffer, int n)
     const float alpha = 1.f - std::exp (-1.f / (tc * (float) sampleRate));
     const float cutAlpha = 1.f - std::exp (-1.f / (0.0015f * (float) sampleRate));
     const float cutTarget = deckCut.load();
-    const float gain = deckGain.load();
+    const float gain = deckGain.load() * deckOn;
+    float dPk = 0.f;
     const double srRatio = dSample->sampleRate / sampleRate;
 
     float* L = buffer.getWritePointer (0);
@@ -831,7 +864,9 @@ void BeatStationProcessor::renderDeck (juce::AudioBuffer<float>& buffer, int n)
         if (inL != nullptr && ! dInternal) { inL[i] += sl; inR[i] += sr; }
         L[i] += sl * dCutNow * gain;
         if (R != nullptr) R[i] += sr * dCutNow * gain;
+        dPk = juce::jmax (dPk, std::abs (sl * dCutNow * gain));
     }
+    if (dPk > deckPeak.load()) deckPeak = dPk;
     deckPos = dPos;
 }
 
@@ -862,6 +897,7 @@ void BeatStationProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
         micBus.applyGain (0, n, ig);
     }
     buffer.clear();
+    updateMixer();
     inL = inR = nullptr;                                              // the IN meter collects only what comes in from outside
     if (inBus.getNumSamples() >= n) { inBus.clear (0, n); inL = inBus.getWritePointer (0); inR = inBus.getWritePointer (1); }
     if (recArmed.load() && haveMic)                                   // REC: the input shows on the IN meter and is written to the recording
@@ -911,6 +947,7 @@ void BeatStationProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
             else po.samples -= n;
         }
     double bpm = pBpm->load(), hostStep = 0.0;
+    juce::int64 hostSample = -1;
     bool hostPlaying = false;
     if (auto* ph = getPlayHead())
         if (auto pos = ph->getPosition())
@@ -918,6 +955,7 @@ void BeatStationProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
             {
                 hostPlaying = true;
                 hostStep = pos->getPpqPosition().orFallback (0.0) * 4.0;
+                hostSample = pos->getTimeInSamples().orFallback (-1);
                 if (auto hb = pos->getBpm()) bpm = *hb;
             }
     const bool running = hostPlaying || playing.load();
@@ -1031,6 +1069,21 @@ void BeatStationProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
     render (buffer, pos, n);
     renderPreview (buffer);
     renderDeck (buffer, n);
+
+    // ---- the audio tracks and the vocal booth (they join the mix here, before the master effects)
+    const bool micForTracks = haveMic && (int) micMono.size() >= n;
+    if (micForTracks)
+    {
+        const float* ml = micBus.getReadPointer (0);
+        const float* mr = micBus.getReadPointer (1);
+        for (int i = 0; i < n; ++i) micMono[(size_t) i] = 0.5f * (ml[i] + mr[i]);
+    }
+    if (tracks.process (buffer, micForTracks ? micMono.data() : nullptr, n, running, hostSample, booth, bpm)
+        && inL != nullptr && ! recArmed.load())                       // an armed track shows the input on the IN meter
+    {
+        inBus.addFrom (0, 0, micBus, 0, 0, n);
+        inBus.addFrom (1, 0, micBus, 1, 0, n);
+    }
     if (inL != nullptr)
     {
         const float l = inBus.getMagnitude (0, 0, n), r = inBus.getMagnitude (1, 0, n);
@@ -1038,11 +1091,35 @@ void BeatStationProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
         if (juce::jmax (l, r) >= 0.999f) clipped[0] = true;
     }
 
-    masterFx.process (buffer);
-    roomFx.process (buffer);                                          // room reverb (does nothing while it is switched off), then the OUT meter
+    fxChain.process (buffer, bpm);                                    // the effects chain
+
+    // ---- the master channel: fader, DIM and MONO, after every effect. Then the OUT meter and the VU.
+    {
+        const float target = juce::Decibels::decibelsToGain (pMaster->load(), -59.9f);
+        buffer.applyGainRamp (0, n, masterNow, target);               // glides, so moving the fader never clicks
+        masterNow = target;
+        mastering.process (buffer);                                   // the mastering station (and its loudness meters, and the bounce to file)
+        const float dim = masterDim.load() ? 0.1f : 1.f;              // DIM and MONO are for listening only: they come after the station and are not in a bounce
+        buffer.applyGainRamp (0, n, dimNow, dim);
+        dimNow = dim;
+        if (masterMono.load() && buffer.getNumChannels() > 1)
+        {
+            float* ml = buffer.getWritePointer (0);
+            float* mr = buffer.getWritePointer (1);
+            for (int i = 0; i < n; ++i) ml[i] = mr[i] = 0.5f * (ml[i] + mr[i]);
+        }
+        const float vc = 1.f - std::exp (-(float) n / (0.3f * (float) sampleRate));   // 300 ms, like a VU needle
+        for (int ch = 0; ch < 2; ++ch)
+        {
+            const float r = buffer.getRMSLevel (juce::jmin (ch, buffer.getNumChannels() - 1), 0, n);
+            vuState[ch] += vc * (r - vuState[ch]);
+            vu[ch] = vuState[ch];
+        }
+    }
 
     const float oL = buffer.getMagnitude (0, 0, n), oR = buffer.getNumChannels() > 1 ? buffer.getMagnitude (1, 0, n) : oL;
     raise (peak[1][0], oL);  raise (peak[1][1], oR);
+    raise (masterPeak[0], oL);  raise (masterPeak[1], oR);
     if (juce::jmax (oL, oR) >= 0.999f) clipped[1] = true;
 
     uint32_t mask = 0;
@@ -1078,7 +1155,7 @@ static EnvData envFromString (const juce::String& str, const EnvData& fallback)
 void BeatStationProcessor::getStateInformation (juce::MemoryBlock& dest)
 {
     auto state = apvts.copyState();
-    for (const char* name : { "PADS", "SEQ", "ENVS", "MIDIMAP", "NAMES" }) state.removeChild (state.getChildWithName (name), nullptr);
+    for (const char* name : { "PADS", "SEQ", "ENVS", "MIDIMAP", "NAMES", "AUDIOTRACKS" }) state.removeChild (state.getChildWithName (name), nullptr);
 
     juce::ValueTree pads ("PADS"), envs ("ENVS");
     for (int i = 0; i < numPads; ++i)
@@ -1108,6 +1185,26 @@ void BeatStationProcessor::getStateInformation (juce::MemoryBlock& dest)
     state.setProperty ("padsInst", padsInst.load(), nullptr);
 
     state.setProperty ("uiScale", uiScale.load(), nullptr);
+    state.setProperty ("fxOrder", fxChain.orderString(), nullptr);
+    state.setProperty ("boothOrder", booth.orderString(), nullptr);
+    juce::String mutes;
+    for (auto& m : padMute) mutes += m.load() ? "1" : "0";
+    state.setProperty ("padMutes", mutes, nullptr);
+    state.setProperty ("keysVol", keysVol.load(), nullptr);   state.setProperty ("keysPan", keysPan.load(), nullptr);
+    state.setProperty ("keysMute", keysMute.load(), nullptr); state.setProperty ("deckMute", deckMute.load(), nullptr);
+    state.setProperty ("deckVol", deckGain.load(), nullptr);
+    juce::ValueTree at ("AUDIOTRACKS");
+    for (int t = 0; t < AudioTracks::num; ++t)
+    {
+        const auto& tr = tracks.tracks[(size_t) t];
+        juce::ValueTree n ("ATRACK");
+        n.setProperty ("name", tr.name, nullptr);     n.setProperty ("file", tr.file, nullptr);
+        n.setProperty ("start", (double) tr.start.load(), nullptr);
+        n.setProperty ("vol", tr.vol.load(), nullptr); n.setProperty ("pan", tr.pan.load(), nullptr);
+        n.setProperty ("mute", tr.mute.load(), nullptr); n.setProperty ("booth", tr.booth.load(), nullptr); n.setProperty ("burned", tr.burned.load(), nullptr);
+        at.appendChild (n, nullptr);
+    }
+    state.appendChild (at, nullptr);
     juce::ValueTree seq ("SEQ");
     seq.setProperty ("bars", seqBars.load(), nullptr);
     for (int t = 0; t < numTracks.load(); ++t)
@@ -1183,6 +1280,25 @@ void BeatStationProcessor::setStateInformation (const void* data, int size)
     }
 
     uiScale = (float) apvts.state.getProperty ("uiScale", 1.0f);
+    fxChain.setOrderFromString (apvts.state.getProperty ("fxOrder", "").toString());
+    booth.setOrderFromString (apvts.state.getProperty ("boothOrder", "").toString());
+    const juce::String mutes = apvts.state.getProperty ("padMutes", "").toString();
+    for (int i = 0; i < numPads; ++i) { padMute[(size_t) i] = i < mutes.length() && mutes[i] == '1'; padSolo[(size_t) i] = false; }
+    keysVol = (float) apvts.state.getProperty ("keysVol", 1.0f);    keysPan = (float) apvts.state.getProperty ("keysPan", 0.0f);
+    keysMute = (bool) apvts.state.getProperty ("keysMute", false);  deckMute = (bool) apvts.state.getProperty ("deckMute", false);
+    deckGain = (float) apvts.state.getProperty ("deckVol", 0.8f);
+    const auto at = apvts.state.getChildWithName ("AUDIOTRACKS");
+    for (int t = 0; t < AudioTracks::num && t < at.getNumChildren(); ++t)
+    {
+        const auto n = at.getChild (t);
+        auto& tr = tracks.tracks[(size_t) t];
+        tr.name = n["name"].toString();
+        tr.vol = (float) n.getProperty ("vol", 0.8f);   tr.pan = (float) n.getProperty ("pan", 0.0f);
+        tr.mute = (bool) n["mute"];                     tr.booth = (bool) n.getProperty ("booth", t < 4);
+        tracks.clearClip (t);
+        const juce::File f (n["file"].toString());
+        if (f.existsAsFile()) tracks.loadClipFile (t, f, (juce::int64) (double) n["start"], (bool) n["burned"], formats);
+    }
     const auto seq = apvts.state.getChildWithName ("SEQ");
     if (seq.isValid())
     {

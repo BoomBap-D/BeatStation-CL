@@ -1,6 +1,6 @@
 #pragma once
 #include <juce_audio_processors/juce_audio_processors.h>
-#include <juce_audio_devices/juce_audio_devices.h>
+#include <juce_audio_devices/juce_audio_devices.h>      // MidiInput: the standalone app opens MIDI keyboards itself
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_dsp/juce_dsp.h>
 #include "Params.h"
@@ -67,6 +67,11 @@ public:
         recLen = 0;
         masterFx.prepare (sr, blockSize);
         roomFx.prepare (sr);
+        fxChain.prepare (sr, blockSize);
+        booth.prepare (sr);
+        mastering.prepare (sr, blockSize);
+        tracks.prepare (sr);
+        micMono.assign ((size_t) juce::jmax (blockSize * 2, 8192), 0.f);
     }
     void releaseResources() override {}
     bool isBusesLayoutSupported (const BusesLayout& l) const override
@@ -112,6 +117,15 @@ public:
     std::atomic<bool> recArmed { false };
     std::atomic<int> recLen { 0 };                      // frames recorded so far
 
+    // ---- Mixer: every sound source has a channel. Faders and pans act live, on notes that are already playing too. ----
+    std::array<std::atomic<bool>, numPads> padMute {}, padSolo {};
+    std::array<std::atomic<float>, numPads> padPeak {};
+    std::atomic<float> keysVol { 1.f }, keysPan { 0.f }, keysPeak { 0.f }, deckPeak { 0.f };
+    std::atomic<bool> keysMute { false }, keysSolo { false }, deckMute { false }, deckSolo { false };
+    std::atomic<bool> masterMono { false }, masterDim { false };       // MONO: check the mix on one speaker. DIM: 20 dB quieter for talking.
+    std::atomic<float> masterPeak[2] {};                                // the output peak, for the mixer's master meters
+    std::atomic<float> vu[2] {};                                        // slow, average level of the output (what a VU needle shows)
+
     // ---- What the keyboard and the pads play ----
     std::atomic<bool> keysDrums { false };              // true = the keyboard plays the drum pads instead of an instrument
     std::atomic<bool> padsInst { false };               // true = the pads play the chosen instrument instead of their samples
@@ -155,7 +169,7 @@ public:
     void removeTrack (int t);
     int findTrack (int src) const;
     std::atomic<int> tracksVersion { 0 };               // bumps when tracks are added or removed (also by recording)
-    void startPlaying() { resetPos = true; playing = true; }
+    void startPlaying() { resetPos = true; tracks.restart = true; playing = true; }
     void stopPlaying() { playing = false; }
     juce::String getTrackName (int t) const { return trackName[(size_t) t]; }     // empty = use the pad's sound name
     void setTrackName (int t, const juce::String& n) { trackName[(size_t) t] = n.trim(); }
@@ -187,7 +201,13 @@ public:
     juce::MidiKeyboardState keyboardState;              // the GUI plays pads and keys through this
     juce::AudioProcessorValueTreeState apvts;
     MasterFx masterFx { apvts };                        // EQ then compressor on the final mix
-    RoomFx roomFx { apvts };                            // then the room reverb
+    RoomFx roomFx { apvts };                            // the room reverb
+    BoothChain booth { apvts };                         // the vocal booth: mic character and the vocal chain
+    AudioTracks tracks;                                 // the eight audio tracks
+    MasterStation mastering { apvts };                  // the mastering station: after the master fader, before MONO / DIM
+    juce::AudioFormatManager& getFormats() { return formats; }
+    double getSR() const { return sampleRate > 0.0 ? sampleRate : 44100.0; }
+    FxChain fxChain { apvts, masterFx, roomFx };        // all eleven effects, in the order you set, on the way to the output
 
 private:
     struct Slot
@@ -230,6 +250,9 @@ private:
     void render (juce::AudioBuffer<float>&, int from, int to);
     void renderPreview (juce::AudioBuffer<float>&);
     void renderDeck (juce::AudioBuffer<float>&, int n);
+    void updateMixer();
+    float padGL[numPads] {}, padGR[numPads] {}, keysGL = 1.f, keysGR = 1.f, deckOn = 1.f, masterNow = 1.f, dimNow = 1.f, vuState[2] {};
+    std::atomic<float>* pMaster = nullptr;
     void renderSampler (juce::AudioBuffer<float>&, int from, int to);
     void renderSynth (juce::AudioBuffer<float>&, int from, int to);
     void startSynth (int note, float velocity, int patchIndex);
@@ -249,6 +272,7 @@ private:
     juce::Random noiseRng;
     juce::AudioBuffer<float> inBus;                      // the pad sounds before the envelope and filter: what the IN meter shows
     float *inL = nullptr, *inR = nullptr;
+    std::vector<float> micMono;                          // the audio input as one channel, for the audio tracks
     juce::AudioBuffer<float> micBus, recBuf;             // the audio input for this block, and the recording
     juce::RangedAudioParameter* padParams[numPads][numPadParams] {};
     std::atomic<float>* raw[numPads][numPadParams] {};   // indexed by PadParam
